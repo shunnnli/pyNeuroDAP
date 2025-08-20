@@ -368,4 +368,467 @@ def make_orthogonal(cd_a, cd_b):
         cd_a_orthogonal = cd_a_orthogonal / cd_a_orthogonal_norm
     
     return cd_a_orthogonal
+
+# =============================================================================
+# rSLDS (Recurrent Switching Linear Dynamical Systems) Implementation
+# =============================================================================
+
+from scipy import linalg
+from scipy.special import logsumexp
+
+class rSLDS:
+    """
+    Recurrent Switching Linear Dynamical System (rSLDS)
+    
+    This implements the rSLDS model described in Linderman et al. (2017):
+    "A flexible recurrent neural network framework for modeling spike trains"
+    
+    The model combines:
+    1. Discrete state switching (Markov chain)
+    2. Continuous linear dynamics within each state
+    3. Recurrence through the discrete state transitions
+    """
+    
+    def __init__(self, n_neurons, n_states, n_lags=1, 
+                 diagonal_noise=True, diagonal_dynamics=True):
+        """
+        Initialize rSLDS model
         
+        Parameters:
+        - n_neurons: int, number of neurons
+        - n_states: int, number of discrete states
+        - n_lags: int, number of time lags for recurrence
+        - diagonal_noise: bool, whether to use diagonal noise covariance
+        - diagonal_dynamics: bool, whether to use diagonal dynamics matrices
+        """
+        self.n_neurons = n_neurons
+        self.n_states = n_states
+        self.n_lags = n_lags
+        self.diagonal_noise = diagonal_noise
+        self.diagonal_dynamics = diagonal_dynamics
+        
+        # Initialize parameters
+        self._initialize_parameters()
+        
+    def _initialize_parameters(self):
+        """Initialize model parameters"""
+        # Discrete state transition parameters
+        self.Pi = np.eye(self.n_states) * 0.9 + np.ones((self.n_states, self.n_states)) * 0.1 / self.n_states
+        
+        # Initial state distribution
+        self.pi0 = np.ones(self.n_states) / self.n_states
+        
+        # Continuous dynamics parameters
+        self.A = []  # State transition matrices
+        self.b = []  # State bias vectors
+        self.Q = []  # State noise covariances
+        
+        for k in range(self.n_states):
+            if self.diagonal_dynamics:
+                # Diagonal dynamics matrix
+                A_k = np.eye(self.n_neurons) * 0.8
+            else:
+                # Full dynamics matrix
+                A_k = np.random.randn(self.n_neurons, self.n_neurons) * 0.1
+                A_k = A_k / np.linalg.norm(A_k) * 0.8
+            
+            self.A.append(A_k)
+            
+            # Bias vector
+            self.b.append(np.random.randn(self.n_neurons) * 0.1)
+            
+            # Noise covariance
+            if self.diagonal_noise:
+                self.Q.append(np.eye(self.n_neurons) * 0.1)
+            else:
+                Q_k = np.random.randn(self.n_neurons, self.n_neurons) * 0.1
+                Q_k = Q_k @ Q_k.T + np.eye(self.n_neurons) * 0.1
+                self.Q.append(Q_k)
+    
+    def sample(self, T, x0=None):
+        """
+        Sample from the rSLDS model
+        
+        Parameters:
+        - T: int, number of time steps
+        - x0: np.ndarray, initial state (optional)
+        
+        Returns:
+        - x: np.ndarray, continuous states (n_neurons, T)
+        - z: np.ndarray, discrete states (T,)
+        """
+        # Initialize
+        x = np.zeros((self.n_neurons, T))
+        z = np.zeros(T, dtype=int)
+        
+        # Sample initial discrete state
+        z[0] = np.random.choice(self.n_states, p=self.pi0)
+        
+        # Sample initial continuous state
+        if x0 is None:
+            x[:, 0] = np.random.multivariate_normal(
+                np.zeros(self.n_neurons), 
+                self.Q[z[0]]
+            )
+        else:
+            x[:, 0] = x0
+        
+        # Sample trajectory
+        for t in range(1, T):
+            # Sample discrete state transition
+            z[t] = np.random.choice(self.n_states, p=self.Pi[z[t-1]])
+            
+            # Sample continuous state
+            mean = self.A[z[t]] @ x[:, t-1] + self.b[z[t]]
+            x[:, t] = np.random.multivariate_normal(mean, self.Q[z[t]])
+        
+        return x, z
+    
+    def log_likelihood(self, x, z):
+        """
+        Compute log likelihood of data given discrete states
+        
+        Parameters:
+        - x: np.ndarray, continuous states (n_neurons, T)
+        - z: np.ndarray, discrete states (T,)
+        
+        Returns:
+        - ll: float, log likelihood
+        """
+        T = x.shape[1]
+        ll = 0.0
+        
+        # Initial state probability
+        ll += np.log(self.pi0[z[0]])
+        
+        # State transition probabilities
+        for t in range(1, T):
+            ll += np.log(self.Pi[z[t-1], z[t]])
+        
+        # Continuous dynamics likelihood
+        for t in range(1, T):
+            mean = self.A[z[t]] @ x[:, t-1] + self.b[z[t]]
+            diff = x[:, t] - mean
+            
+            if self.diagonal_noise:
+                ll += -0.5 * np.sum(diff**2 / np.diag(self.Q[z[t]]))
+                ll += -0.5 * np.sum(np.log(2 * np.pi * np.diag(self.Q[z[t]])))
+            else:
+                Q_inv = np.linalg.inv(self.Q[z[t]])
+                ll += -0.5 * diff.T @ Q_inv @ diff
+                ll += -0.5 * np.log(np.linalg.det(2 * np.pi * self.Q[z[t]]))
+        
+        return ll
+    
+    def e_step(self, x):
+        """
+        E-step: Compute expected discrete states and sufficient statistics
+        
+        Parameters:
+        - x: np.ndarray, continuous states (n_neurons, T)
+        
+        Returns:
+        - gamma: np.ndarray, state probabilities (n_states, T)
+        - xi: np.ndarray, transition probabilities (n_states, n_states, T-1)
+        """
+        T = x.shape[1]
+        
+        # Forward pass (alpha)
+        alpha = np.zeros((self.n_states, T))
+        alpha[:, 0] = self.pi0
+        
+        for t in range(1, T):
+            for k in range(self.n_states):
+                # Compute emission probability
+                mean = self.A[k] @ x[:, t-1] + self.b[k]
+                diff = x[:, t] - mean
+                
+                if self.diagonal_noise:
+                    log_emit = -0.5 * np.sum(diff**2 / np.diag(self.Q[k]))
+                else:
+                    Q_inv = np.linalg.inv(self.Q[k])
+                    log_emit = -0.5 * diff.T @ Q_inv @ diff
+                
+                # Forward recursion
+                alpha[k, t] = np.sum(alpha[:, t-1] * self.Pi[:, k]) * np.exp(log_emit)
+        
+        # Backward pass (beta)
+        beta = np.zeros((self.n_states, T))
+        beta[:, -1] = 1.0
+        
+        for t in range(T-2, -1, -1):
+            for k in range(self.n_states):
+                for j in range(self.n_states):
+                    mean = self.A[j] @ x[:, t] + self.b[j]
+                    diff = x[:, t+1] - mean
+                    
+                    if self.diagonal_noise:
+                        log_emit = -0.5 * np.sum(diff**2 / np.diag(self.Q[j]))
+                    else:
+                        Q_inv = np.linalg.inv(self.Q[j])
+                        log_emit = -0.5 * diff.T @ Q_inv @ diff
+                    
+                    beta[k, t] += self.Pi[k, j] * np.exp(log_emit) * beta[j, t+1]
+        
+        # State probabilities (gamma)
+        gamma = alpha * beta
+        gamma = gamma / np.sum(gamma, axis=0, keepdims=True)
+        
+        # Transition probabilities (xi)
+        xi = np.zeros((self.n_states, self.n_states, T-1))
+        for t in range(T-1):
+            for k in range(self.n_states):
+                for j in range(self.n_states):
+                    mean = self.A[j] @ x[:, t] + self.b[j]
+                    diff = x[:, t+1] - mean
+                    
+                    if self.diagonal_noise:
+                        log_emit = -0.5 * np.sum(diff**2 / np.diag(self.Q[j]))
+                    else:
+                        Q_inv = np.linalg.inv(self.Q[j])
+                        log_emit = -0.5 * diff.T @ Q_inv @ diff
+                    
+                    xi[k, j, t] = alpha[k, t] * self.Pi[k, j] * np.exp(log_emit) * beta[j, t+1]
+            
+            # Normalize
+            xi[:, :, t] = xi[:, :, t] / np.sum(xi[:, :, t])
+        
+        return gamma, xi
+    
+    def m_step(self, x, gamma, xi):
+        """
+        M-step: Update model parameters
+        
+        Parameters:
+        - x: np.ndarray, continuous states (n_neurons, T)
+        - gamma: np.ndarray, state probabilities (n_states, T)
+        - xi: np.ndarray, transition probabilities (n_states, n_states, T-1)
+        """
+        T = x.shape[1]
+        
+        # Update initial state distribution
+        self.pi0 = gamma[:, 0]
+        
+        # Update transition matrix
+        for k in range(self.n_states):
+            for j in range(self.n_states):
+                self.Pi[k, j] = np.sum(xi[k, j, :]) / np.sum(gamma[k, :-1])
+        
+        # Update continuous dynamics parameters
+        for k in range(self.n_states):
+            # Sum of state probabilities for state k
+            N_k = np.sum(gamma[k, :])
+            N_k_prev = np.sum(gamma[k, :-1])
+            
+            if N_k_prev > 0:
+                # Update bias
+                self.b[k] = np.sum(gamma[k, 1:] * x[:, 1:], axis=1) / N_k_prev
+                
+                # Update dynamics matrix
+                if self.diagonal_dynamics:
+                    # Diagonal case
+                    for i in range(self.n_neurons):
+                        numerator = np.sum(gamma[k, 1:] * x[i, 1:] * x[i, :-1])
+                        denominator = np.sum(gamma[k, 1:] * x[i, :-1]**2)
+                        if denominator > 0:
+                            self.A[k][i, i] = numerator / denominator
+                else:
+                    # Full matrix case
+                    S_xx = np.zeros((self.n_neurons, self.n_neurons))
+                    S_xy = np.zeros((self.n_neurons, self.n_neurons))
+                    
+                    for t in range(T-1):
+                        x_t = x[:, t].reshape(-1, 1)
+                        x_t1 = x[:, t+1].reshape(-1, 1)
+                        
+                        S_xx += gamma[k, t+1] * x_t @ x_t.T
+                        S_xy += gamma[k, t+1] * x_t1 @ x_t.T
+                    
+                    if np.linalg.det(S_xx) > 1e-10:
+                        self.A[k] = S_xy @ np.linalg.inv(S_xx)
+                
+                # Update noise covariance
+                if self.diagonal_noise:
+                    # Diagonal case
+                    for i in range(self.n_neurons):
+                        diff = x[i, 1:] - (self.A[k][i, i] * x[i, :-1] + self.b[k][i])
+                        self.Q[k][i, i] = np.sum(gamma[k, 1:] * diff**2) / N_k_prev
+                else:
+                    # Full matrix case
+                    Q_k = np.zeros((self.n_neurons, self.n_neurons))
+                    for t in range(T-1):
+                        mean = self.A[k] @ x[:, t] + self.b[k]
+                        diff = x[:, t+1] - mean
+                        Q_k += gamma[k, t+1] * diff.reshape(-1, 1) @ diff.reshape(1, -1)
+                    
+                    self.Q[k] = Q_k / N_k_prev
+    
+    def fit(self, x, max_iter=100, tol=1e-6, verbose=True):
+        """
+        Fit rSLDS model using EM algorithm
+        
+        Parameters:
+        - x: np.ndarray, continuous states (n_neurons, T)
+        - max_iter: int, maximum EM iterations
+        - tol: float, convergence tolerance
+        - verbose: bool, whether to print progress
+        
+        Returns:
+        - ll_history: list, log likelihood history
+        """
+        ll_history = []
+        
+        for iter in range(max_iter):
+            # E-step
+            gamma, xi = self.e_step(x)
+            
+            # M-step
+            self.m_step(x, gamma, xi)
+            
+            # Compute log likelihood
+            # For efficiency, we'll use the most likely discrete states
+            z_ml = np.argmax(gamma, axis=0)
+            ll = self.log_likelihood(x, z_ml)
+            ll_history.append(ll)
+            
+            if verbose and iter % 10 == 0:
+                print(f"Iteration {iter}: Log likelihood = {ll:.4f}")
+            
+            # Check convergence
+            if iter > 0 and abs(ll - ll_history[-2]) < tol:
+                if verbose:
+                    print(f"Converged after {iter+1} iterations")
+                break
+        
+        return ll_history
+    
+    def predict_states(self, x):
+        """
+        Predict discrete states for new data
+        
+        Parameters:
+        - x: np.ndarray, continuous states (n_neurons, T)
+        
+        Returns:
+        - z_pred: np.ndarray, predicted discrete states (T,)
+        - gamma: np.ndarray, state probabilities (n_states, T)
+        """
+        gamma, _ = self.e_step(x)
+        z_pred = np.argmax(gamma, axis=0)
+        return z_pred, gamma
+    
+    def get_state_means(self, x, gamma):
+        """
+        Get expected continuous state means for each discrete state
+        
+        Parameters:
+        - x: np.ndarray, continuous states (n_neurons, T)
+        - gamma: np.ndarray, state probabilities (n_states, T)
+        
+        Returns:
+        - state_means: np.ndarray, state means (n_states, n_neurons)
+        """
+        state_means = np.zeros((self.n_states, self.n_neurons))
+        
+        for k in range(self.n_states):
+            if np.sum(gamma[k, :]) > 0:
+                state_means[k] = np.sum(gamma[k, :] * x, axis=1) / np.sum(gamma[k, :])
+        
+        return state_means
+
+def fit_rslds(data, n_states, n_lags=1, diagonal_noise=True, diagonal_dynamics=True,
+               max_iter=100, tol=1e-6, verbose=True):
+    """
+    Convenience function to fit rSLDS model
+    
+    Parameters:
+    - data: np.ndarray, shape (n_neurons, n_trials, n_bins) or (n_neurons, n_bins)
+    - n_states: int, number of discrete states
+    - n_lags: int, number of time lags for recurrence
+    - diagonal_noise: bool, whether to use diagonal noise covariance
+    - diagonal_dynamics: bool, whether to use diagonal dynamics matrices
+    - max_iter: int, maximum EM iterations
+    - tol: float, convergence tolerance
+    - verbose: bool, whether to print progress
+    
+    Returns:
+    - model: fitted rSLDS model
+    - ll_history: log likelihood history
+    """
+    # Handle different input shapes
+    if data.ndim == 3:
+        # (n_neurons, n_trials, n_bins) -> concatenate trials
+        n_neurons, n_trials, n_bins = data.shape
+        data_flat = data.reshape(n_neurons, n_trials * n_bins)
+    else:
+        data_flat = data
+    
+    # Initialize and fit model
+    model = rSLDS(data_flat.shape[0], n_states, n_lags, diagonal_noise, diagonal_dynamics)
+    ll_history = model.fit(data_flat, max_iter, tol, verbose)
+    
+    return model, ll_history
+
+def analyze_rslds_states(model, data, trial_labels=None):
+    """
+    Analyze rSLDS states and their relationship to trial conditions
+    
+    Parameters:
+    - model: fitted rSLDS model
+    - data: np.ndarray, shape (n_neurons, n_trials, n_bins)
+    - trial_labels: np.ndarray, trial condition labels (optional)
+    
+    Returns:
+    - analysis_dict: dictionary with analysis results
+    """
+    n_neurons, n_trials, n_bins = data.shape
+    
+    # Get state predictions for each trial
+    state_predictions = []
+    state_probabilities = []
+    
+    for trial in range(n_trials):
+        x_trial = data[:, trial, :]
+        z_pred, gamma = model.predict_states(x_trial)
+        state_predictions.append(z_pred)
+        state_probabilities.append(gamma)
+    
+    # Analyze state usage
+    all_states = np.concatenate(state_predictions)
+    state_counts = np.bincount(all_states, minlength=model.n_states)
+    state_usage = state_counts / len(all_states)
+    
+    # Analyze state transitions
+    transition_matrix = np.zeros((model.n_states, model.n_states))
+    for trial_states in state_predictions:
+        for t in range(1, len(trial_states)):
+            transition_matrix[trial_states[t-1], trial_states[t]] += 1
+    
+    # Normalize
+    row_sums = transition_matrix.sum(axis=1)
+    transition_matrix = transition_matrix / row_sums[:, np.newaxis]
+    transition_matrix = np.nan_to_num(transition_matrix, 0.0)
+    
+    # Analyze state-condition relationships if labels provided
+    condition_analysis = None
+    if trial_labels is not None:
+        unique_labels = np.unique(trial_labels)
+        condition_analysis = {}
+        
+        for label in unique_labels:
+            label_trials = trial_labels == label
+            label_states = [state_predictions[i] for i in np.where(label_trials)[0]]
+            
+            if label_states:
+                all_label_states = np.concatenate(label_states)
+                label_state_counts = np.bincount(all_label_states, minlength=model.n_states)
+                label_state_usage = label_state_counts / len(all_label_states)
+                condition_analysis[label] = label_state_usage
+    
+    return {
+        'state_predictions': state_predictions,
+        'state_probabilities': state_probabilities,
+        'state_usage': state_usage,
+        'transition_matrix': transition_matrix,
+        'condition_analysis': condition_analysis
+    }
