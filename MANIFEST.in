@@ -1,0 +1,12 @@
+include README.md
+include LICENSE
+include requirements.txt
+include MANIFEST.in
+recursive-include pyNeuroDAP *.py
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
+recursive-exclude * .DS_Store
+recursive-exclude * .git*
+recursive-exclude * Paolo's code/*
+recursive-exclude * Rec_Upstream_DCN_1_250411_MixedmW_500ms_041225001/*
+recursive-exclude * *.ipynb

@@ -294,3 +294,242 @@ def plotScatterBar(data,
         ax.set_xticklabels(labels, rotation=30, ha='right', fontsize=4.5)
 
     return ax
+
+
+def plot_psth(spike_data, time_window=None, bin_size_ms=50, ax=None, 
+              color='blue', label=None, alpha=0.7, show_sem=True):
+    """
+    Plot Peri-Stimulus Time Histogram (PSTH)
+    
+    Parameters:
+    - spike_data: array-like, spike counts [neurons, trials, time_bins]
+    - time_window: tuple, (start_ms, end_ms) for x-axis
+    - bin_size_ms: float, bin size in milliseconds
+    - ax: matplotlib axis, axis to plot on
+    - color: str or tuple, color for the plot
+    - label: str, label for the plot
+    - alpha: float, transparency
+    - show_sem: bool, whether to show standard error of mean
+    """
+    if ax is None:
+        ax = plt.gca()
+    
+    # Average across neurons and trials
+    if spike_data.ndim == 3:
+        mean_rate = np.nanmean(spike_data, axis=(0, 1))  # Average across neurons and trials
+        sem_rate = np.nanstd(np.nanmean(spike_data, axis=0), axis=0) / np.sqrt(spike_data.shape[1])
+    elif spike_data.ndim == 2:
+        mean_rate = np.nanmean(spike_data, axis=0)  # Average across trials
+        sem_rate = np.nanstd(spike_data, axis=0) / np.sqrt(spike_data.shape[0])
+    else:
+        mean_rate = spike_data
+        sem_rate = np.zeros_like(mean_rate)
+    
+    # Create time axis
+    if time_window is None:
+        time_window = (0, len(mean_rate) * bin_size_ms)
+    
+    time_axis = np.arange(time_window[0], time_window[1], bin_size_ms)
+    if len(time_axis) > len(mean_rate):
+        time_axis = time_axis[:len(mean_rate)]
+    elif len(time_axis) < len(mean_rate):
+        mean_rate = mean_rate[:len(time_axis)]
+        sem_rate = sem_rate[:len(time_axis)]
+    
+    # Plot
+    ax.plot(time_axis, mean_rate, color=color, label=label, alpha=alpha, linewidth=2)
+    
+    if show_sem and not np.all(sem_rate == 0):
+        ax.fill_between(time_axis, mean_rate - sem_rate, mean_rate + sem_rate, 
+                       color=color, alpha=0.3)
+    
+    ax.set_xlabel('Time (ms)')
+    ax.set_ylabel('Firing Rate (Hz)')
+    ax.set_title('Peri-Stimulus Time Histogram')
+    ax.grid(True, alpha=0.3)
+    
+    return ax
+
+
+def plot_tuning_curve(responses, conditions, ax=None, color='blue', 
+                     marker='o', markersize=8, show_error=True):
+    """
+    Plot tuning curve for different conditions
+    
+    Parameters:
+    - responses: array-like, response values for each condition
+    - conditions: list, condition labels
+    - ax: matplotlib axis, axis to plot on
+    - color: str or tuple, color for the plot
+    - marker: str, marker style
+    - markersize: int, marker size
+    - show_error: bool, whether to show error bars if responses is 2D
+    """
+    if ax is None:
+        ax = plt.gca()
+    
+    responses = np.asarray(responses)
+    
+    if responses.ndim == 1:
+        # Single response per condition
+        ax.plot(conditions, responses, marker=marker, color=color, 
+               markersize=markersize, linewidth=2)
+    elif responses.ndim == 2:
+        # Multiple responses per condition (e.g., multiple trials)
+        mean_responses = np.nanmean(responses, axis=0)
+        sem_responses = np.nanstd(responses, axis=0) / np.sqrt(responses.shape[0])
+        
+        ax.plot(conditions, mean_responses, marker=marker, color=color, 
+               markersize=markersize, linewidth=2)
+        
+        if show_error:
+            ax.fill_between(conditions, mean_responses - sem_responses, 
+                           mean_responses + sem_responses, 
+                           color=color, alpha=0.3)
+    
+    ax.set_xlabel('Condition')
+    ax.set_ylabel('Response')
+    ax.set_title('Tuning Curve')
+    ax.grid(True, alpha=0.3)
+    
+    return ax
+
+
+def plot_decoder_performance(accuracies, time_points=None, ax=None, 
+                           color='blue', label='Decoder Accuracy', 
+                           show_chance=True, chance_level=0.5):
+    """
+    Plot decoder performance over time
+    
+    Parameters:
+    - accuracies: array-like, decoder accuracies for each time point
+    - time_points: array-like, time points for x-axis
+    - ax: matplotlib axis, axis to plot on
+    - color: str or tuple, color for the plot
+    - label: str, label for the plot
+    - show_chance: bool, whether to show chance level line
+    - chance_level: float, chance level for classification
+    """
+    if ax is None:
+        ax = plt.gca()
+    
+    accuracies = np.asarray(accuracies)
+    
+    if time_points is None:
+        time_points = np.arange(len(accuracies))
+    
+    # Plot accuracy
+    ax.plot(time_points, accuracies, color=color, label=label, 
+           linewidth=2, marker='o', markersize=6)
+    
+    # Show chance level
+    if show_chance:
+        ax.axhline(y=chance_level, color='red', linestyle='--', 
+                  alpha=0.7, label=f'Chance ({chance_level:.2f})')
+    
+    ax.set_xlabel('Time Point')
+    ax.set_ylabel('Accuracy')
+    ax.set_title('Decoder Performance Over Time')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    return ax
+
+
+def plot_coding_directions(cd_stimulus, cd_choice, ax=None, 
+                          colors=['red', 'blue'], labels=['Stimulus CD', 'Choice CD']):
+    """
+    Plot coding directions as vectors
+    
+    Parameters:
+    - cd_stimulus: array-like, stimulus coding direction vector
+    - cd_choice: array-like, choice coding direction vector
+    - ax: matplotlib axis, axis to plot on
+    - colors: list, colors for the vectors
+    - labels: list, labels for the vectors
+    """
+    if ax is None:
+        ax = plt.gca()
+    
+    # Normalize vectors for visualization
+    cd_stimulus_norm = cd_stimulus / np.linalg.norm(cd_stimulus)
+    cd_choice_norm = cd_choice / np.linalg.norm(cd_choice)
+    
+    # Create 2D projection if higher dimensional
+    if len(cd_stimulus_norm) > 2:
+        # Use first two dimensions or PCA
+        from sklearn.decomposition import PCA
+        pca = PCA(n_components=2)
+        vectors_2d = pca.fit_transform(np.vstack([cd_stimulus_norm, cd_choice_norm]))
+        cd_stimulus_2d = vectors_2d[0]
+        cd_choice_2d = vectors_2d[1]
+    else:
+        cd_stimulus_2d = cd_stimulus_norm
+        cd_choice_2d = cd_choice_norm
+    
+    # Plot vectors
+    ax.quiver(0, 0, cd_stimulus_2d[0], cd_stimulus_2d[1], 
+              color=colors[0], label=labels[0], scale=1, alpha=0.8, linewidth=3)
+    ax.quiver(0, 0, cd_choice_2d[0], cd_choice_2d[1], 
+              color=colors[1], label=labels[1], scale=1, alpha=0.8, linewidth=3)
+    
+    # Set equal aspect ratio and limits
+    ax.set_aspect('equal')
+    max_val = max(np.max(np.abs(cd_stimulus_2d)), np.max(np.abs(cd_choice_2d)))
+    ax.set_xlim(-max_val*1.2, max_val*1.2)
+    ax.set_ylim(-max_val*1.2, max_val*1.2)
+    
+    ax.set_xlabel('Dimension 1')
+    ax.set_ylabel('Dimension 2')
+    ax.set_title('Coding Directions')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    return ax
+
+
+def plot_rslds_states(state_sequence, time_points=None, ax=None, 
+                     colors=None, labels=None, title='rSLDS State Sequence'):
+    """
+    Plot rSLDS state sequence over time
+    
+    Parameters:
+    - state_sequence: array-like, state sequence (integers)
+    - time_points: array-like, time points for x-axis
+    - ax: matplotlib axis, axis to plot on
+    - colors: list, colors for different states
+    - labels: list, labels for different states
+    - title: str, plot title
+    """
+    if ax is None:
+        ax = plt.gca()
+    
+    state_sequence = np.asarray(state_sequence)
+    
+    if time_points is None:
+        time_points = np.arange(len(state_sequence))
+    
+    # Get unique states
+    unique_states = np.unique(state_sequence)
+    n_states = len(unique_states)
+    
+    # Set default colors and labels
+    if colors is None:
+        colors = plt.cm.Set3(np.linspace(0, 1, n_states))
+    
+    if labels is None:
+        labels = [f'State {i}' for i in unique_states]
+    
+    # Plot state sequence
+    for i, state in enumerate(unique_states):
+        state_mask = state_sequence == state
+        ax.scatter(time_points[state_mask], state_sequence[state_mask], 
+                  color=colors[i], label=labels[i], s=20, alpha=0.8)
+    
+    ax.set_xlabel('Time')
+    ax.set_ylabel('State')
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    return ax
