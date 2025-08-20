@@ -339,3 +339,33 @@ def get_mod_index(data0, data1, type='norm'):
         d_prime = (mean_0 - mean_1) / np.sqrt((var_0 + var_1) / 2 + 1e-12)  # add epsilon to avoid div by zero
         return d_prime
         
+def make_orthogonal(cd_a, cd_b):
+    """
+    Make CD A orthogonal to CD B using the Gram-Schmidt process.
+    
+    Parameters:
+    - cd_a: np.ndarray, shape (n_neurons,) - The CD to be made orthogonal
+    - cd_b: np.ndarray, shape (n_neurons,) - The reference CD to be orthogonal to
+    
+    Returns:
+    - cd_a_orthogonal: np.ndarray, shape (n_neurons,) - CD A made orthogonal to CD B
+    """
+    # Normalize cd_b to unit norm
+    cd_b_norm = np.linalg.norm(cd_b)
+    if cd_b_norm == 0:
+        raise ValueError("CD B has zero norm, cannot use for orthogonalization")
+    cd_b_unit = cd_b / cd_b_norm
+    
+    # Project cd_a onto cd_b
+    projection = np.dot(cd_a, cd_b_unit)
+    
+    # Subtract the projection to make cd_a orthogonal to cd_b
+    cd_a_orthogonal = cd_a - projection * cd_b_unit
+    
+    # Normalize the orthogonal CD to unit norm
+    cd_a_orthogonal_norm = np.linalg.norm(cd_a_orthogonal)
+    if cd_a_orthogonal_norm > 0:
+        cd_a_orthogonal = cd_a_orthogonal / cd_a_orthogonal_norm
+    
+    return cd_a_orthogonal
+        
