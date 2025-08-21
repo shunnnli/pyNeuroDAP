@@ -30,21 +30,19 @@ from .spikes import (
 
 from .trials import (
     get_trial_table,
-    get_trial_conditions,
-    get_trial_events,
+    get_trial_times,
     get_trial_data
 )
 
 from .sessions import (
-    save_trial_table,
-    load_trial_table,
+    save_dataframe,
+    load_dataframe,
     save_aligned_spikes,
     load_aligned_spikes,
-    save_session_data,
+    save_variables,
+    load_variables,
     load_session_data,
-    add_to_session,
-    list_sessions,
-    get_session_summary
+    get_file_info
 )
 
 from .plots import (
@@ -53,7 +51,16 @@ from .plots import (
     plot_tuning_curve,
     plot_decoder_performance,
     plot_coding_directions,
-    plot_rslds_states
+    plot_rslds_states,
+    plot_sem,
+    convert_dict_to_list,
+    plot_pca
+)
+
+from .gui import (
+    create_session_gui,
+    create_parameter_gui,
+    generate_default_save_path
 )
 
 # Define what gets imported with "from pyNeuroDAP import *"
@@ -74,20 +81,18 @@ __all__ = [
     
     # Trial management
     'get_trial_table',
-    'get_trial_conditions',
-    'get_trial_events',
+    'get_trial_times',
     'get_trial_data',
     
     # Session management
-    'save_trial_table',
-    'load_trial_table',
+    'save_dataframe',
+    'load_dataframe',
     'save_aligned_spikes',
     'load_aligned_spikes',
-    'save_session_data',
+    'save_variables',
+    'load_variables',
     'load_session_data',
-    'add_to_session',
-    'list_sessions',
-    'get_session_summary',
+    'get_file_info',
     
     # Visualization
     'plot_psth',
@@ -95,5 +100,13 @@ __all__ = [
     'plot_tuning_curve',
     'plot_decoder_performance',
     'plot_coding_directions',
-    'plot_rslds_states'
+    'plot_rslds_states',
+    'plot_sem',
+    'convert_dict_to_list',
+    'plot_pca',
+    
+    # GUI utilities
+    'create_session_gui',
+    'create_parameter_gui',
+    'generate_default_save_path'
 ]

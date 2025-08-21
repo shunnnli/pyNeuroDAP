@@ -23,7 +23,7 @@ def extract_lick_columns(df, side):
     return lick_cols
 
 
-def get_trial_table(session_folder, trial_range):
+def get_trial_table(session_folder, trial_range='all'):
     """
     Get trial table for a given session and trial range
     
@@ -39,7 +39,10 @@ def get_trial_table(session_folder, trial_range):
     all_trial_data_df = pd.read_csv(csv_path_csv)
 
     # Select trials
-    all_trial_data_df = all_trial_data_df.iloc[trial_range[0]:trial_range[1]]
+    if trial_range == 'all':
+        all_trial_data_df = all_trial_data_df
+    else:
+        all_trial_data_df = all_trial_data_df.iloc[trial_range[0]:trial_range[1]]
 
     # Get all right and left lick columns
     right_lick_cols = extract_lick_columns(all_trial_data_df, "Right")
@@ -84,46 +87,7 @@ def get_trial_table(session_folder, trial_range):
     return all_trial_data_df
 
 
-def get_trial_conditions(trial_data_df):
-    """
-    Extract trial conditions from trial data
-    
-    Parameters:
-    - trial_data_df: pandas DataFrame, trial data
-    
-    Returns:
-    - trial_conditions: list, unique trial condition strings
-    """
-    conditions = set()
-    
-    for _, trial in trial_data_df.iterrows():
-        try:
-            is_laser = trial['IsLaserTrial'] == 1
-            is_right = trial['TrialSide'] == 'Right'
-            is_rewarded = trial['RMI'] == 'reward'
-            
-            # Determine trial condition string
-            if is_laser:
-                if is_right:
-                    cond = 'reward_right_laser' if is_rewarded else 'nonreward_right_laser'
-                else:
-                    cond = 'reward_left_laser' if is_rewarded else 'nonreward_left_laser'
-            else:
-                if is_right:
-                    cond = 'reward_right_control' if is_rewarded else 'nonreward_right_control'
-                else:
-                    cond = 'reward_left_control' if is_rewarded else 'nonreward_left_control'
-            
-            conditions.add(cond)
-            
-        except Exception as e:
-            print(f"Error processing trial for conditions: {e}")
-            continue
-    
-    return list(conditions)
-
-
-def get_trial_events(trial_data_df, trial_conditions):
+def get_trial_times(trial_data_df, trial_conditions):
     """
     Get event times for a given trial data frame and trial conditions
     
@@ -220,7 +184,7 @@ def get_trial_data(trial_data_df, trial_conditions, event_types=None):
         event_types = ['trial_start', 'choice_lick', 'second_lick', 'last_lick']
     
     # Get event times
-    event_times = get_trial_events(trial_data_df, trial_conditions)
+    event_times = get_trial_times(trial_data_df, trial_conditions)
     
     # Organize data by condition
     trial_data = {}

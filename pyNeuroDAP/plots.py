@@ -43,6 +43,33 @@ def plot_sem(y, x=None,
             ax.plot(x, trace, linewidth=0.5, color=color, alpha=0.2, label="_nolegend_")
 
 
+def convert_dict_to_list(data):
+    """
+    Convert dictionary structure (from HDF5 loading) back to list format for plotting.
+    
+    Parameters:
+    - data: dict with keys like 'item_0', 'item_1', etc., or list of arrays
+    
+    Returns:
+    - list of arrays (compatible with plot_raster)
+    """
+    if isinstance(data, list):
+        # Already in the correct format
+        return data
+    elif isinstance(data, dict):
+        # Convert from dictionary format to list format
+        converted_list = []
+        i = 0
+        while f'item_{i}' in data:
+            item = data[f'item_{i}']
+            if hasattr(item, '__getitem__'):  # Check if it's array-like
+                converted_list.append(item)
+            i += 1
+        return converted_list
+    else:
+        # Fallback: try to convert to list
+        return list(data)
+
 def plot_raster(data, x=None, 
                 color='blue', dot_size=15, alpha=0.5,
                 ax=None):
@@ -55,6 +82,9 @@ def plot_raster(data, x=None,
         - data should be array‐like shape (n_events, n_bins),
           and x a 1D array of length n_bins (bin centers).
     """
+    
+    # Convert data to the correct format if needed
+    data = convert_dict_to_list(data)
     
     # Detect jagged list-of-arrays vs. real 2D array
     is_matrix = isinstance(data, np.ndarray) and data.ndim == 2

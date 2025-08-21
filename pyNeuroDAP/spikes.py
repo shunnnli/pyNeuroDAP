@@ -2,6 +2,7 @@
 # from nt import remove
 import numpy as np
 import warnings
+from tqdm import tqdm
 
 def get_spikes(spikes, event_times, 
                time_range,          # in seconds: (t_start, t_end), e.g. (-0.5, 1.0)
@@ -9,7 +10,8 @@ def get_spikes(spikes, event_times,
                ap_fs=40000,         # fs of the ephys recording system
                same_system=True,
                params=None,
-               include_units=None):       # e.g. {'clusters': [0,2,5]}
+               include_units=None,
+               verbose=False):       # e.g. {'clusters': [0,2,5]}
 
     '''
     Get spikes from given list of units aligned to some events
@@ -57,8 +59,12 @@ def get_spikes(spikes, event_times,
         'units': include_units
     }
 
-    # 4) loop events
-    for i_ev, ev in enumerate(event_times):
+    # 4) loop events with tqdm progress bar
+    if verbose:
+        iterator = tqdm(event_times, desc="Aligning spikes to events", leave=True)
+    else:
+        iterator = event_times
+    for i_ev, ev in enumerate(iterator):
         if np.isnan(ev):
             # turn the corresponding row into all nan and continue
             for u in range(len(include_units)):
@@ -241,9 +247,17 @@ def project(data, decoder=None, cd=None):
     - projected data: np.ndarray
     """
 
-    data = remove_nan_trials(data)
+    # Only remove nan trials if data is 3D (neurons × trials × bins)
+    # If data is already 2D (neurons × bins), it means trials have been averaged
     if isinstance(data, np.ndarray) and data.ndim == 3:
+        data = remove_nan_trials(data)
         data = np.mean(data, axis=1)
+    elif isinstance(data, np.ndarray) and data.ndim == 2:
+        # Data is already 2D (neurons × bins), no need to remove nan trials
+        pass
+    else:
+        # Handle other cases
+        data = np.asarray(data)
 
     if (decoder is not None) and (cd is not None):
         raise ValueError("Only one of 'decoder' or 'cd' should be provided.")
@@ -678,7 +692,13 @@ class rSLDS:
         """
         ll_history = []
         
-        for iter in range(max_iter):
+        # Use tqdm for progress bar if verbose
+        if verbose:
+            iterator = tqdm(range(max_iter), desc="Fitting rSLDS", leave=True)
+        else:
+            iterator = range(max_iter)
+        
+        for iter in iterator:
             # E-step
             gamma, xi = self.e_step(x)
             
