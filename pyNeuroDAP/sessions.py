@@ -4,6 +4,103 @@ from pathlib import Path
 import warnings
 import pandas as pd
 
+
+# ---------- Helper for h5py ----------
+class SpikeTimes:
+    """
+    Access like: times[unit_id] -> [trial0_times, trial1_times, ..., trial{T-1}_times]
+    Handles HDF5 layouts where 'times' is saved as a nested list:
+      - times/item_X is a Group with per-item datasets item_Y
+      - times/item_X is a 1-D vlen Dataset (indexable by the other axis)
+    It auto-detects whether the outer list is 'units' or 'trials' and normalizes to per-trial.
+    """
+    def __init__(self, grp: h5py.Group):
+        self.g = grp
+        # Expect sibling 'rate' to define (U, T, B)
+        try:
+            r = grp.parent['rate']
+            self.U, self.T = int(r.shape[0]), int(r.shape[1])
+        except Exception:
+            # Fallback if 'rate' is missing: guess from attrs
+            self.U = int(grp.attrs.get('n_units', 0))
+            self.T = int(grp.attrs.get('n_trials', grp.attrs.get('length', 0)))
+
+        # What does the outer list represent?
+        outer_len = int(grp.attrs.get('length', 0))
+        self.outer_is_trials = (self.T and outer_len == self.T)
+        self.outer_is_units  = (self.U and outer_len == self.U)
+
+    @staticmethod
+    def _as_int(x):
+        if isinstance(x, np.ndarray):
+            if x.ndim == 0 or x.size == 1:
+                return int(x.ravel()[0])
+            raise TypeError("times[u] expects a single unit index, not an array.")
+        return int(x)
+
+    def __getitem__(self, unit_idx):
+        u = self._as_int(unit_idx)
+        out = []
+
+        # Helper to turn node (Group/Dataset) + index into 1D array
+        def _pull_from_group_unit_first(group_node, trial_idx):
+            # group_node is a Group with datasets item_{trial_idx}
+            ds = group_node.get(f'item_{trial_idx}')
+            return np.array(ds) if isinstance(ds, h5py.Dataset) else np.array([])
+
+        def _pull_from_group_trial_first(group_node, unit_idx):
+            # group_node is a Group with datasets item_{unit_idx}
+            ds = group_node.get(f'item_{unit_idx}')
+            return np.array(ds) if isinstance(ds, h5py.Dataset) else np.array([])
+
+        # Case 1: outer == trials  (times/item_t is per-trial)
+        if self.outer_is_trials:
+            for t in range(self.T):
+                node = self.g[f'item_{t}']  # Group or 1-D vlen Dataset
+                if isinstance(node, h5py.Group):
+                    out.append(_pull_from_group_trial_first(node, u))
+                elif isinstance(node, h5py.Dataset):
+                    # vlen vector indexed by unit
+                    try:
+                        out.append(np.array(node[u]))
+                    except Exception:
+                        out.append(np.array([]))
+                else:
+                    out.append(np.array([]))
+            return out
+
+        # Case 2: outer == units  (times/item_u is per-unit)  <-- your file right now
+        if self.outer_is_units:
+            node = self.g.get(f'item_{u}')  # Group or 1-D vlen Dataset over trials
+            if isinstance(node, h5py.Group):
+                for t in range(self.T):
+                    out.append(_pull_from_group_unit_first(node, t))
+            elif isinstance(node, h5py.Dataset):
+                # vlen vector indexed by trial
+                for t in range(min(self.T, node.shape[0] if node.shape else self.T)):
+                    out.append(np.array(node[t]))
+                if len(out) < self.T:
+                    out.extend([np.array([])] * (self.T - len(out)))
+            else:
+                out = [np.array([]) for _ in range(self.T)]
+            return out
+
+        # Fallback: assume outer is trials if we couldn't tell
+        for t in range(self.T):
+            try:
+                node = self.g[f'item_{t}']
+                if isinstance(node, h5py.Group):
+                    out.append(_pull_from_group_trial_first(node, u))
+                elif isinstance(node, h5py.Dataset):
+                    out.append(np.array(node[u]))
+                else:
+                    out.append(np.array([]))
+            except Exception:
+                out.append(np.array([]))
+        return out
+
+
+# ---------- Save and load data ----------
 def save_dataframe(df, filepath, key='trial_table', mode='a', append=False):
     """
     Save pandas DataFrame to HDF5 file using h5py directly
@@ -84,30 +181,33 @@ def save_aligned_spikes(aligned_spikes, filepath, key):
     print(f"Aligned spikes saved to {filepath} with key '{key}'")
     return str(filepath)
 
-def load_aligned_spikes(filepath):
+def load_aligned_spikes(filepath, lazy=True):
     """
-    Load aligned spikes data from HDF5 file
-    
-    Parameters:
-    - filepath: str or Path, path to HDF5 file
-    
-    Returns:
-    - aligned_spikes: dict, loaded aligned spike data
+    Load aligned spikes. If lazy=True, 'rate' is h5py.Dataset and 'times' is SpikeTimes.
+    The file is kept open; call close_loaded(...) when you're done.
     """
     filepath = Path(filepath)
     if not filepath.exists():
         raise FileNotFoundError(f"File not found: {filepath}")
-    
-    with h5py.File(filepath, 'r') as f:
-        # Load keys directly from root level
-        aligned_spikes = {}
-        for key in f.keys():
-            if isinstance(f[key], h5py.Group):
-                # Load the spike data for this event type
-                aligned_spikes[key] = _load_dict_recursive(f[key])
-    
-    print(f"Aligned spikes loaded from {filepath}")
+
+    f = h5py.File(filepath, 'r')           # keep open for lazy reads
+    aligned_spikes = {}
+    for key in f.keys():
+        if isinstance(f[key], h5py.Group):
+            aligned_spikes[key] = _load_dict_recursive(f[key], lazy=lazy)
+
+    aligned_spikes['__h5file__'] = f
+    print(f"Aligned spikes loaded from {filepath} (lazy={lazy})")
     return aligned_spikes
+
+def close_loaded(obj):
+    """Close the underlying HDF5 file stored under '__h5file__'."""
+    f = obj.pop('__h5file__', None)
+    if f is not None:
+        try:
+            f.close()
+        except Exception:
+            pass
 
 def get_file_info(filepath):
     """
@@ -267,143 +367,134 @@ def load_session_data(filepath):
     print(f"Session data loaded from {filepath}")
     return session_data
 
+
+# ---------- Key methods for saving and loading data ----------
+
+def _default_rate_chunks(shape):
+    # (units, trials, timebins) tuned for time-window slices & trial concat
+    u, t, b = shape
+    return (min(64, u), min(128, t), min(128, b))
+
 def _save_dict_recursive(group, data_dict):
-    """Helper function to recursively save nested dictionaries"""
+    """Recursively save nested dicts. Special-cases: 'rate'."""
     for key, value in data_dict.items():
         if isinstance(value, dict):
-            # Create subgroup for nested dict
             sub_group = group.create_group(key)
             _save_dict_recursive(sub_group, value)
         elif isinstance(value, (list, np.ndarray)):
-            # List or array
+            # ---- SPECIAL CASE: 'rate' -> chunked dataset (lazy-friendly) ----
+            if key == 'rate':
+                arr = np.asarray(value, dtype=np.float32)
+                if key in group:
+                    del group[key]
+                group.create_dataset(
+                    key, data=arr,
+                    chunks=_default_rate_chunks(arr.shape),
+                    compression='gzip', compression_opts=4,
+                    shuffle=True, fletcher32=True
+                )
+                continue
+            # ---- default behavior (your existing logic) ----
             try:
                 data_array = np.array(value)
-                if data_array.dtype.kind in ['U', 'S']:  # String arrays
+                if data_array.dtype.kind in ['U', 'S']:
                     data_array = data_array.astype('S')
                 group.create_dataset(key, data=data_array, compression='gzip')
             except ValueError:
-                # Handle inhomogeneous lists (like list of arrays with different shapes)
-                if isinstance(value, list) and len(value) > 0:
-                    # Create a subgroup for the inhomogeneous list
-                    list_group = group.create_group(key)
-                    list_group.attrs['is_inhomogeneous_list'] = True
-                    list_group.attrs['length'] = len(value)
-                    list_group.attrs['is_nested_list'] = any(isinstance(item, list) for item in value)
-                    
-                    # Save each item individually
-                    for i, item in enumerate(value):
-                        if isinstance(item, np.ndarray):
-                            # Save NumPy array
-                            list_group.create_dataset(f'item_{i}', data=item, compression='gzip')
-                            list_group.attrs[f'item_{i}_shape'] = item.shape
-                        elif isinstance(item, (list, tuple)):
-                            # Recursively save nested lists/tuples
-                            _save_dict_recursive(list_group, {f'item_{i}': item})
-                        else:
-                            # Save scalar values
-                            list_group.attrs[f'item_{i}'] = item
-                else:
-                    # Fallback to string for other cases
-                    group.attrs[key] = str(value)
+                # inhomogeneous list fallback (your current approach)
+                list_group = group.create_group(key)
+                list_group.attrs['is_inhomogeneous_list'] = True
+                list_group.attrs['length'] = len(value)
+                is_nested = any(isinstance(item, (list, np.ndarray)) for item in value)
+                list_group.attrs['is_nested_list'] = is_nested
+
+                for i, item in enumerate(value):
+                    item_key = f'item_{i}'
+                    if isinstance(item, (list, np.ndarray)):
+                        sub = list_group.create_group(item_key)
+                        for j, subitem in enumerate(item):
+                            sub_key = f'item_{j}'
+                            if isinstance(subitem, (list, np.ndarray)):
+                                sub.create_dataset(sub_key, data=np.array(subitem))
+                            else:
+                                sub.attrs[sub_key] = subitem
+                    else:
+                        list_group.create_dataset(item_key, data=np.array(item))
         elif isinstance(value, tuple):
-            # Handle tuples by saving as special attribute with type info
             group.attrs[f"{key}_is_tuple"] = True
             group.attrs[key] = str(value)
         else:
-            # Scalar or simple type
             group.attrs[key] = value
 
-def _load_dict_recursive(group):
-    """Helper function to recursively load nested dictionaries"""
+
+def _load_dict_recursive(group, *, lazy=True):
+    """Recursively load nested dicts, with lazy leaves for large data."""
     data = {}
-    
-    # Load datasets and nested groups
+
+    # children (groups/datasets)
     for key in group.keys():
-        if isinstance(group[key], h5py.Group):
-            # Check if this is an inhomogeneous list
-            if 'is_inhomogeneous_list' in group[key].attrs:
-                # Reconstruct inhomogeneous list
-                length = group[key].attrs['length']
-                is_nested = group[key].attrs.get('is_nested_list', False)
+        item = group[key]
+        if isinstance(item, h5py.Group):
+            # If this is your special inhomogeneous list (used by 'times'):
+            if 'is_inhomogeneous_list' in item.attrs:
+                # ---- SPECIAL CASE: 'times' lazy wrapper ----
+                if lazy and key == 'times':
+                    data[key] = SpikeTimes(item)
+                    continue
+
+                # ----- EXISTING EAGER RECONSTRUCTION (unchanged) -----
+                length = int(item.attrs['length'])
+                is_nested = bool(item.attrs.get('is_nested_list', False))
                 reconstructed_list = []
-                
                 for i in range(length):
                     item_key = f'item_{i}'
-                    if item_key in group[key]:
-                        if isinstance(group[key][item_key], h5py.Dataset):
-                            # Load NumPy array
-                            reconstructed_list.append(group[key][item_key][:])
-                        else:
-                            # Recursively load nested structures
-                            reconstructed_list.append(_load_dict_recursive(group[key][item_key]))
+                    if isinstance(item[item_key], h5py.Dataset):
+                        reconstructed_list.append(np.array(item[item_key]))
+                    elif isinstance(item[item_key], h5py.Group):
+                        nested = []
+                        for nested_key in item[item_key].keys():
+                            if isinstance(item[item_key][nested_key], h5py.Dataset):
+                                nested.append(np.array(item[item_key][nested_key]))
+                            else:
+                                nested.append(item[item_key].attrs.get(nested_key))
+                        reconstructed_list.append(nested)
                     else:
-                        # Load from attributes (scalar values)
-                        reconstructed_list.append(group[key].attrs[item_key])
-                
-                # If this was originally a nested list, we need to transpose the structure
+                        reconstructed_list.append(item.attrs[item_key])
+
                 if is_nested and reconstructed_list and isinstance(reconstructed_list[0], list):
-                    # Transpose: from [trial][unit] to [unit][trial]
-                    # This gives us the structure: aligned['event']['times'][unit_id] = [trial_0_array, trial_1_array, ...]
                     n_units = len(reconstructed_list[0])
                     n_trials = len(reconstructed_list)
                     transposed = []
-                    
-                    for unit_idx in range(n_units):
+                    for u in range(n_units):
                         unit_data = []
-                        for trial_idx in range(n_trials):
-                            if unit_idx < len(reconstructed_list[trial_idx]):
-                                unit_data.append(reconstructed_list[trial_idx][unit_idx])
+                        for t in range(n_trials):
+                            if u < len(reconstructed_list[t]):
+                                unit_data.append(reconstructed_list[t][u])
                             else:
-                                unit_data.append(np.array([]))  # Empty array if no data
+                                unit_data.append(np.array([]))
                         transposed.append(unit_data)
-                    
                     data[key] = transposed
                 else:
-                    # This is a regular inhomogeneous list (not nested)
-                    # Just return the reconstructed list as-is
                     data[key] = reconstructed_list
             else:
-                # Regular nested group - recurse
-                data[key] = _load_dict_recursive(group[key])
+                data[key] = _load_dict_recursive(item, lazy=lazy)
         else:
-            # Dataset
-            data[key] = group[key][:]
-    
-    # Load attributes and reconstruct tuples
+            # Dataset leaf
+            if lazy and key == 'rate':
+                data[key] = item                     # h5py.Dataset (lazy)
+            else:
+                data[key] = item[()]                 # materialize small leaves
+
+    # attributes (params/metadata/tuples)
     for key in group.attrs.keys():
         if key.endswith('_is_tuple'):
-            continue  # Skip the tuple flag attributes
-        
-        value = group.attrs[key]
-        
-        # Check if this was originally a tuple
-        if f"{key}_is_tuple" in group.attrs:
-            try:
-                # Convert string representation back to tuple
-                # Remove parentheses and split by comma
-                clean_str = value.strip('()')
-                if clean_str:  # Handle empty tuples
-                    # Split by comma and convert to appropriate types
-                    elements = [elem.strip() for elem in clean_str.split(',')]
-                    # Try to convert to float/int, fallback to string
-                    converted_elements = []
-                    for elem in elements:
-                        try:
-                            if '.' in elem:
-                                converted_elements.append(float(elem))
-                            else:
-                                converted_elements.append(int(elem))
-                        except ValueError:
-                            converted_elements.append(elem)
-                    data[key] = tuple(converted_elements)
-                else:
-                    data[key] = ()
-            except Exception:
-                # If conversion fails, keep as string
-                data[key] = value
-        else:
-            data[key] = value
-    
+            continue
+        val = group.attrs[key]
+        data[key] = val
+
     return data
+
+
+
 
 

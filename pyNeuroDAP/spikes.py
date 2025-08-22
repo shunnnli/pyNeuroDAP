@@ -13,13 +13,37 @@ def get_spikes(spikes, event_times,
                include_units=None,
                verbose=False):       # e.g. {'clusters': [0,2,5]}
 
-    '''
-    Get spikes from given list of units aligned to some events
+    """
+    Extracts and aligns spike times from a list of units to specified event times.
 
-    Input:
-        'spikes': n_spikes x 3 matrix (sample_index, unit_index, segment_index)
+    Parameters:
+        spikes : np.ndarray
+            Array of shape (n_spikes, 3), where each row is (sample_index, unit_index, segment_index).
+        event_times : array-like
+            List or array of event times (in seconds) to which spikes will be aligned.
+        time_range : tuple
+            Time window around each event, in seconds (start, end), e.g., (-0.5, 1.0).
+        bin_size_ms : float, optional
+            Bin width in milliseconds (default: 10 ms).
+        ap_fs : float, optional
+            Sampling rate of the ephys recording system (default: 40000).
+        same_system : bool, optional
+            If False, uses synchronization parameters in 'params' to align times (default: True).
+        params : dict, optional
+            Synchronization parameters, required if same_system is False.
+        include_units : array-like, optional
+            List of unit indices to include. If None, includes all units found in 'spikes'.
+        verbose : bool, optional
+            If True, displays a progress bar.
 
-    '''
+    Returns:
+        spike_count : np.ndarray
+            Array of shape (n_units, n_events, n_bins) with spike counts per bin.
+        spike_times : list of list of np.ndarray
+            Nested list: spike_times[unit][event] gives array of spike times (in seconds) for that unit/event.
+        spike_params : dict
+            Dictionary of parameters used for alignment and binning.
+    """
 
     # convert bin size to seconds
     bin_size = bin_size_ms / 1000.0
@@ -126,6 +150,79 @@ def get_spikes(spikes, event_times,
     }
 
     return aligned
+
+
+def combine_rates(rate_list, axis=1, chunks=None, target_time_chunk=None):
+    """
+    Lazy concat using dask if available; falls back to numpy.
+    - axis: concat axis (your code uses axis=1 for trials)
+    - chunks: tuple for da.from_array if arrays don't expose .chunks
+    - target_time_chunk: optional int; if set and your time axis is 2,
+      rechunk the result along axis=2 to this size (helps your 50ms–5s windows).
+    """
+    if not rate_list:
+        raise ValueError("combine_rates: rate_list is empty")
+
+    try:
+        import dask.array as da
+        import numpy as np
+
+        # Shapes & dtype checks
+        shapes = [tuple(r.shape) for r in rate_list]
+        rank = len(shapes[0])
+        if any(len(s) != rank for s in shapes):
+            raise ValueError(f"Incompatible ranks in rate_list: {shapes}")
+        for ax in range(rank):
+            if ax == axis:  # concat axis can differ
+                continue
+            dim0 = shapes[0][ax]
+            if any(s[ax] != dim0 for s in shapes[1:]):
+                raise ValueError(f"Non-concat axis {ax} sizes differ: {shapes}")
+
+        # Decide base chunks for non-concat axes
+        def _fallback_chunks(shape):
+            return (min(64, shape[0]), min(128, shape[1]), min(128, shape[2])) if len(shape) == 3 else None
+
+        base = None
+        for r in rate_list:
+            if hasattr(r, "chunks") and getattr(r, "chunks") is not None:
+                base = r.chunks
+                break
+        if base is None:
+            base = chunks or _fallback_chunks(shapes[0])
+
+        # Ensure base is a tuple of ints per axis
+        if base is not None:
+            if len(base) != rank:
+                raise ValueError(f"chunks has wrong rank: {base} for shape {shapes[0]}")
+            # Align non-concat axes to same chunk size across arrays
+            aligned_chunks = list(base)
+            # leave concat axis chunk as-is (dask will stack them)
+        else:
+            aligned_chunks = None
+
+        darrs = []
+        for r in rate_list:
+            ck = tuple(aligned_chunks) if aligned_chunks is not None else None
+            # lock=True is important for h5py thread-safety
+            darrs.append(da.from_array(r, chunks=ck, lock=True))
+
+        out = da.concatenate(darrs, axis=axis)
+
+        # Optional rechunk along time axis to something window-friendly
+        # assuming (units, trials, time) => time axis = 2
+        if target_time_chunk is not None and rank >= 3:
+            time_axis = 2
+            if time_axis != axis:
+                out = out.rechunk({time_axis: int(target_time_chunk)})
+
+        return out
+
+    except Exception:
+        # Fallback: eager numpy concat (will load to RAM)
+        import numpy as np
+        return np.concatenate([np.asarray(r) for r in rate_list], axis=axis)
+
 
 
 from sklearn.linear_model import LogisticRegressionCV
@@ -266,7 +363,8 @@ def project(data, decoder=None, cd=None):
         b = decoder.intercept_[0]  # scalar
         return w.dot(data) + b
     elif cd is not None:
-        return np.dot(cd, data)
+        axes = (0, 0) if cd.ndim == 1 else (1, 0)
+        return np.tensordot(cd, data, axes=axes)
     else:
         return data
 
@@ -287,14 +385,11 @@ def get_window(data, onset_time=0, window_ms=(0,100),
     xaxis = np.linspace(t_start, t_end, n_bins)
     onset_bin = np.argmin(np.abs(xaxis - onset_time))
 
-    # 3) build the response‐window bins
-    win_bins = np.arange(onset_bin + start_offset_bins,
-                        onset_bin + end_offset_bins)
-    # clip to valid range
-    win_bins = win_bins[(win_bins >= 0) & (win_bins < data.shape[2])]
+    # 3) make it continuous
+    beg = max(0, onset_bin + start_offset_bins)
+    end = min(n_bins, onset_bin + end_offset_bins)
 
-    # 4) subset data
-    return data[:, :, win_bins]
+    return data[:, :, beg:end]
 
 
 

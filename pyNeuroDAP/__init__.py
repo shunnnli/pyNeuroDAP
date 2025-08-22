@@ -17,6 +17,7 @@ __author__ = "Shun Li"
 # Import main functionality from modules
 from .spikes import (
     get_spikes,
+    combine_rates,
     remove_nan_trials,
     get_decoders,
     project,
@@ -39,6 +40,7 @@ from .sessions import (
     load_dataframe,
     save_aligned_spikes,
     load_aligned_spikes,
+    close_loaded,
     save_variables,
     load_variables,
     load_session_data,
@@ -67,6 +69,7 @@ from .gui import (
 __all__ = [
     # Core spike analysis
     'get_spikes',
+    'combine_rates',
     'remove_nan_trials',
     'get_decoders',
     'project',
@@ -89,6 +92,7 @@ __all__ = [
     'load_dataframe',
     'save_aligned_spikes',
     'load_aligned_spikes',
+    'close_loaded',
     'save_variables',
     'load_variables',
     'load_session_data',

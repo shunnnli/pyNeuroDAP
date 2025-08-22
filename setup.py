@@ -44,6 +44,7 @@ setup(
         "h5py>=3.0.0",
         "tables>=3.7.0",
         "tqdm>=4.60.0",
+        "dask>=2022.0.0",
         "pathlib2>=2.3.0; python_version<'3.4'",
     ],
     extras_require={
