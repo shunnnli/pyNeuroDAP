@@ -14,38 +14,43 @@ sns.set_style("white")
 sns.set_context("talk")
 
 # Helper functions for plotting results
-def plot_trajectory(z, x, ax=None, ls="-"):
+def plot_trajectory(z, x, ax=None, ls="-", colormap=None):
     zcps = np.concatenate(([0], np.where(np.diff(z))[0] + 1, [z.size]))
     if ax is None:
         fig = plt.figure(figsize=(4, 4))
         ax = fig.gca()
+    if colormap is None:
+        colormap = plt.get_cmap('Purples')
     for start, stop in zip(zcps[:-1], zcps[1:]):
         ax.plot(x[start:stop + 1, 0],
                 x[start:stop + 1, 1],
                 lw=1, ls=ls,
-                color=colors[z[start] % len(colors)],
+                color=colormap(z[start] / (np.max(z) if np.max(z) > 0 else 1)),
                 alpha=1.0)
     return ax
 
-def plot_observations(z, y, ax=None, ls="-", lw=1):
+def plot_observations(z, y, ax=None, ls="-", lw=1, colormap=None):
     zcps = np.concatenate(([0], np.where(np.diff(z))[0] + 1, [z.size]))
     if ax is None:
         fig = plt.figure(figsize=(4, 4))
         ax = fig.gca()
+    if colormap is None:
+        colormap = plt.get_cmap('Purples')
     T, N = y.shape
     t = np.arange(T)
     for n in range(N):
         for start, stop in zip(zcps[:-1], zcps[1:]):
             ax.plot(t[start:stop + 1], y[start:stop + 1, n],
                     lw=lw, ls=ls,
-                    color=colors[z[start] % len(colors)],
+                    color=colormap(z[start] / (np.max(z) if np.max(z) > 0 else 1)),
                     alpha=1.0)
     return ax
 
 def plot_most_likely_dynamics(model,
     xlim=(-4, 4), ylim=(-3, 3), nxpts=20, nypts=20,
-    alpha=0.8, ax=None, figsize=(3, 3)):
-    
+    alpha=0.8, ax=None, figsize=(3, 3), colormap=None):
+    if colormap is None:
+        colormap = plt.get_cmap('Purples')
     K = model.K
     assert model.D == 2
     x = np.linspace(*xlim, nxpts)
@@ -67,7 +72,7 @@ def plot_most_likely_dynamics(model,
         if zk.sum(0) > 0:
             ax.quiver(xy[zk, 0], xy[zk, 1],
                       dxydt_m[zk, 0], dxydt_m[zk, 1],
-                      color=colors[k % len(colors)], alpha=alpha)
+                      color=colormap(k / (K - 1)), alpha=alpha)
 
     ax.set_xlabel('$x_1$')
     ax.set_ylabel('$x_2$')
