@@ -62,7 +62,8 @@ from .plots import (
 from .gui import (
     create_session_gui,
     create_parameter_gui,
-    generate_default_save_path
+    generate_default_save_path,
+    select_sessions
 )
 
 # Define what gets imported with "from pyNeuroDAP import *"
@@ -112,5 +113,6 @@ __all__ = [
     # GUI utilities
     'create_session_gui',
     'create_parameter_gui',
-    'generate_default_save_path'
+    'generate_default_save_path',
+    'select_sessions'
 ]

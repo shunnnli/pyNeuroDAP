@@ -3,7 +3,7 @@ GUI utilities for NeuroDAP package
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import os
 from datetime import datetime
 
@@ -332,3 +332,21 @@ def create_parameter_gui(parameters, title="Parameter Settings"):
     root.mainloop()
     
     return param_values
+
+def select_sessions(title="Select Session Folders"):
+    root = tk.Tk()
+    root.withdraw()  # Hide the main Tkinter window
+
+
+    file_paths = filedialog.askopenfilenames(
+        title="Select Multiple Files",
+        filetypes=(("Text files", "*.txt"), ("All files", "*.*")),
+        multiple=True
+    )
+
+    if file_paths:
+        print("Selected files:")
+        for path in file_paths:
+            print(path)
+    else:
+        print("No files selected.")

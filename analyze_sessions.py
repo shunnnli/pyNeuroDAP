@@ -6,10 +6,18 @@ import numpy as np
 import pyNeuroDAP as ndap
 from tqdm import tqdm
 
-# Select multiple sessions
-session_folders = [
-    "/Users/shunli/Projects/pyNeuroDAP/Rec_Upstream_DCN_1_250411_MixedmW_500ms_041225001",
-]
+# Select multiple sessions using GUI
+print("Please select session folders for analysis...")
+session_folders = ndap.select_sessions("Select Session Folders for Analysis")
+
+if not session_folders:
+    print("No sessions selected. Exiting.")
+    exit()
+
+# Print selected sessions
+print(f"Selected {len(session_folders)} session(s):")
+for folder in session_folders:
+    print(f"  - {os.path.basename(folder)}")
 
 # Create GUI to get session-specific parameters
 print("Opening GUI to set session parameters...")
