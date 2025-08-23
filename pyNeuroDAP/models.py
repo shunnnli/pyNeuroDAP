@@ -4,6 +4,12 @@ import autograd.numpy.random as npr
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+import seaborn as sns
+color_names = ["windows blue", "red", "amber", "faded green"]
+colors = sns.xkcd_palette(color_names)
+sns.set_style("white")
+sns.set_context("talk")
+
 # Note: ssm import is only needed when actually using SSM functions
 # We'll import it dynamically in the functions that need it
 
@@ -13,6 +19,7 @@ import seaborn as sns
 
 def fit_rslds_model(data, n_states=4, n_latent_dims=2, method="laplace_em", 
                     variational_posterior="structured_meanfield", num_iters=100, 
+                    dynamics="diagonal_gaussian", emissions="gaussian_orthog",
                     alpha=0.0, random_seed=None):
     """
     Fit a Recurrent Switching Linear Dynamical System (rSLDS) to spike data.
@@ -49,7 +56,10 @@ def fit_rslds_model(data, n_states=4, n_latent_dims=2, method="laplace_em",
     try:
         import ssm.ssm as ssm
     except ImportError:
-        raise ImportError("SSM library not found. Please install it with: pip install -e . from the ssm directory")
+        try:
+            import ssm
+        except ImportError:
+            raise ImportError("SSM library not found. Please install it with: pip install -e . from the ssm directory")
     
     if random_seed is not None:
         npr.seed(random_seed)
@@ -71,8 +81,8 @@ def fit_rslds_model(data, n_states=4, n_latent_dims=2, method="laplace_em",
     # Create rSLDS model
     model = ssm.SLDS(data_ssm.shape[1], n_states, n_latent_dims,
                      transitions="recurrent_only",
-                     dynamics="diagonal_gaussian",
-                     emissions="gaussian_orthog",
+                     dynamics=dynamics,
+                     emissions=emissions,
                      single_subspace=True)
     
     # Initialize model
@@ -97,7 +107,7 @@ def fit_rslds_model(data, n_states=4, n_latent_dims=2, method="laplace_em",
     return model, posterior, elbos
 
 
-def get_inferred_states(model, posterior, data, method="laplace_em"):
+def get_inferred_states(model, posterior, data, method="laplace_em", z=None):
     """
     Extract inferred discrete and continuous states from fitted model.
     
@@ -111,6 +121,8 @@ def get_inferred_states(model, posterior, data, method="laplace_em"):
         Original input data
     method : str
         Method to use for inference: "laplace_em" or "bbvi"
+    z : np.ndarray, optional
+        True discrete states (for permutation and verification of rSLDS notebook)
         
     Returns:
     --------
@@ -119,6 +131,17 @@ def get_inferred_states(model, posterior, data, method="laplace_em"):
     x_inferred : np.ndarray
         Inferred continuous states
     """
+    # Import SSM only when needed
+    try:
+        import ssm.ssm as ssm
+        from ssm.util import find_permutation
+    except ImportError:
+        try:
+            import ssm
+            from ssm.util import find_permutation
+        except ImportError:
+            raise ImportError("SSM library not found. Please install it with: pip install -e . from the ssm directory")
+
     # Handle different input shapes
     if data.ndim == 3:
         data_flat = np.mean(data, axis=1)  # shape: (n_neurons, n_timebins)
@@ -135,6 +158,8 @@ def get_inferred_states(model, posterior, data, method="laplace_em"):
         raise ValueError(f"Unknown method: {method}")
     
     # Get most likely discrete states
+    if z is not None:
+        model.permute(find_permutation(z, model.most_likely_states(x_inferred, data_ssm)))
     z_inferred = model.most_likely_states(x_inferred, data_ssm)
     
     return z_inferred, x_inferred
@@ -554,7 +579,7 @@ def list_saved_models(models_file):
 
 def plot_rslds_trajectory(model=None, posterior=None, data=None, method="laplace_em",
     z=None, x=None, ax=None, 
-    line_style="-", line_width=2, colormap=None,
+    line_style="-", line_width=2, color=None, label=None,
     key_time=None, time_range=None, bin_size=None,
     marker='x', marker_size=80, marker_color='red'
 ):
@@ -569,18 +594,17 @@ def plot_rslds_trajectory(model=None, posterior=None, data=None, method="laplace
     if ax is None:
         fig = plt.figure(figsize=(4, 4))
         ax = fig.gca()
-    if colormap is None:
-        colormap = plt.get_cmap('Purples')
-    elif isinstance(colormap, str):
-        colormap = plt.get_cmap(colormap)
+    if color is None: color = 'blue'
 
     for start, stop in zip(zcps[:-1], zcps[1:]):
+        alpha = (start + 1) / z.size # goes from ~0 to 1
+        if isinstance(color, str): plot_color = color
+        else: plot_color = color[z[start] % len(color)]
         ax.plot(
             x[start:stop + 1, 0],
             x[start:stop + 1, 1],
             lw=line_width, ls=line_style,
-            color=colormap(z[start] / (np.max(z) if np.max(z) > 0 else 1)),
-            alpha=1.0
+            color=plot_color, alpha=alpha, label=label
         )
     # Add marker(s) for key_time if provided
     if key_time is not None:
@@ -605,7 +629,7 @@ def plot_rslds_trajectory(model=None, posterior=None, data=None, method="laplace
 
 def plot_rslds_observations(model=None, posterior=None, data=None, method="laplace_em",
                             z=None, y=None, n_neurons=3, 
-                            ax=None, line_style="-", line_width=2, colormap=None,
+                            ax=None, line_style="-", line_width=2, color=None, label=None,
                             key_time=None, time_range=None, bin_size=None,
                             marker='x', marker_size=80, marker_color='red'):
     if model is not None:
@@ -627,19 +651,18 @@ def plot_rslds_observations(model=None, posterior=None, data=None, method="lapla
     if ax is None:
         fig = plt.figure(figsize=(4, 4))
         ax = fig.gca()
-    if colormap is None:
-        colormap = plt.get_cmap('Paired')
-    elif isinstance(colormap, str):
-        colormap = plt.get_cmap(colormap)
+    if color is None: color = 'blue'
 
     T, N = y.shape
     t = np.arange(T)
     for n in range(N):
         for start, stop in zip(zcps[:-1], zcps[1:]):
+            alpha = (start + 1) / z.size # goes from ~0 to 1
+            if isinstance(color, str): plot_color = color
+            else: plot_color = color[z[start] % len(color)]
             ax.plot(t[start:stop + 1], y[start:stop + 1, n],
                     lw=line_width, ls=line_style,
-                    color=colormap(z[start] / (np.max(z) if np.max(z) > 0 else 1)),
-                    alpha=1.0)
+                    color=plot_color, alpha=alpha, label=label)
     return ax
 
 
