@@ -24,9 +24,17 @@ from .spikes import (
     get_window,
     get_mod_index,
     make_orthogonal,
-    rSLDS,
-    fit_rslds,
-    analyze_rslds_states
+)
+
+from .ssm import (
+    fit_rslds_model,
+    get_inferred_states,
+    plot_rslds,
+    run_rslds_analysis,
+    compare_rslds_methods,
+    save_rslds_model,
+    load_rslds_model,
+    list_saved_models
 )
 
 from .trials import (
@@ -78,10 +86,15 @@ __all__ = [
     'get_mod_index',
     'make_orthogonal',
     
-    # rSLDS modeling
-    'rSLDS',
-    'fit_rslds',
-    'analyze_rslds_states',
+    # SSM-based rSLDS modeling
+    'fit_rslds_model',
+    'get_inferred_states',
+    'plot_rslds',
+    'run_rslds_analysis',
+    'compare_rslds_methods',
+    'save_rslds_model',
+    'load_rslds_model',
+    'list_saved_models',
     
     # Trial management
     'get_trial_table',

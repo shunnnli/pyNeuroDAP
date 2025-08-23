@@ -11,5 +11,8 @@ tqdm>=4.60.0
 dask>=2022.0.0
 PySide6>=6.0.0
 
+# Optional dependencies for advanced modeling
+# ssm>=0.3.0  # For rSLDS modeling (install separately if needed)
+
 # Built-in modules (no installation needed)
 # tkinter - built into Python
