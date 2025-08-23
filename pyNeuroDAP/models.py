@@ -7,81 +7,6 @@ import seaborn as sns
 # Note: ssm import is only needed when actually using SSM functions
 # We'll import it dynamically in the functions that need it
 
-# Color palette for plotting
-color_names = ["windows blue", "red", "amber", "faded green", "dusty purple", "orange", "clay", "pink", "light blue", "mint"]
-colors = sns.xkcd_palette(color_names)
-sns.set_style("white")
-sns.set_context("talk")
-
-# Helper functions for plotting results
-def plot_trajectory(z, x, ax=None, ls="-", colormap=None):
-    zcps = np.concatenate(([0], np.where(np.diff(z))[0] + 1, [z.size]))
-    if ax is None:
-        fig = plt.figure(figsize=(4, 4))
-        ax = fig.gca()
-    if colormap is None:
-        colormap = plt.get_cmap('Purples')
-    for start, stop in zip(zcps[:-1], zcps[1:]):
-        ax.plot(x[start:stop + 1, 0],
-                x[start:stop + 1, 1],
-                lw=1, ls=ls,
-                color=colormap(z[start] / (np.max(z) if np.max(z) > 0 else 1)),
-                alpha=1.0)
-    return ax
-
-def plot_observations(z, y, ax=None, ls="-", lw=1, colormap=None):
-    zcps = np.concatenate(([0], np.where(np.diff(z))[0] + 1, [z.size]))
-    if ax is None:
-        fig = plt.figure(figsize=(4, 4))
-        ax = fig.gca()
-    if colormap is None:
-        colormap = plt.get_cmap('Purples')
-    T, N = y.shape
-    t = np.arange(T)
-    for n in range(N):
-        for start, stop in zip(zcps[:-1], zcps[1:]):
-            ax.plot(t[start:stop + 1], y[start:stop + 1, n],
-                    lw=lw, ls=ls,
-                    color=colormap(z[start] / (np.max(z) if np.max(z) > 0 else 1)),
-                    alpha=1.0)
-    return ax
-
-def plot_most_likely_dynamics(model,
-    xlim=(-4, 4), ylim=(-3, 3), nxpts=20, nypts=20,
-    alpha=0.8, ax=None, figsize=(3, 3), colormap=None):
-    if colormap is None:
-        colormap = plt.get_cmap('Purples')
-    K = model.K
-    assert model.D == 2
-    x = np.linspace(*xlim, nxpts)
-    y = np.linspace(*ylim, nypts)
-    X, Y = np.meshgrid(x, y)
-    xy = np.column_stack((X.ravel(), Y.ravel()))
-
-    # Get the probability of each state at each xy location
-    z = np.argmax(xy.dot(model.transitions.Rs.T) + model.transitions.r, axis=1)
-
-    if ax is None:
-        fig = plt.figure(figsize=figsize)
-        ax = fig.add_subplot(111)
-
-    for k, (A, b) in enumerate(zip(model.dynamics.As, model.dynamics.bs)):
-        dxydt_m = xy.dot(A.T) + b - xy
-
-        zk = z == k
-        if zk.sum(0) > 0:
-            ax.quiver(xy[zk, 0], xy[zk, 1],
-                      dxydt_m[zk, 0], dxydt_m[zk, 1],
-                      color=colormap(k / (K - 1)), alpha=alpha)
-
-    ax.set_xlabel('$x_1$')
-    ax.set_ylabel('$x_2$')
-
-    plt.tight_layout()
-
-    return ax
-
-
 # =============================================================================
 # Main Wrapper Functions for rSLDS Analysis
 # =============================================================================
@@ -185,7 +110,7 @@ def get_inferred_states(model, posterior, data, method="laplace_em"):
     data : np.ndarray
         Original input data
     method : str
-        Fitting method used ("laplace_em" or "bbvi")
+        Method to use for inference: "laplace_em" or "bbvi"
         
     Returns:
     --------
@@ -213,105 +138,6 @@ def get_inferred_states(model, posterior, data, method="laplace_em"):
     z_inferred = model.most_likely_states(x_inferred, data_ssm)
     
     return z_inferred, x_inferred
-
-
-def plot_rslds(model, posterior, data, method="laplace_em", 
-                plot_trajectories=True, plot_dynamics=True, plot_elbo=True):
-    """
-    Comprehensive analysis of rSLDS results with automatic plotting.
-    
-    Parameters:
-    -----------
-    model : ssm.SLDS
-        Fitted rSLDS model
-    posterior : object
-        Posterior object from fitting
-    data : np.ndarray
-        Original input data
-    method : str
-        Fitting method used
-    plot_trajectories : bool
-        Whether to plot state trajectories (default: True)
-    plot_dynamics : bool
-        Whether to plot system dynamics (default: True)
-    plot_elbo : bool
-        Whether to plot ELBO convergence (default: True)
-        
-    Returns:
-    --------
-    results : dict
-        Dictionary containing all analysis results
-    """
-    # Get inferred states
-    z_inferred, x_inferred = get_inferred_states(model, posterior, data, method)
-    
-    # Handle different input shapes for plotting
-    if data.ndim == 3:
-        data_flat = np.mean(data, axis=1)  # shape: (n_neurons, n_timebins)
-    else:
-        data_flat = data
-    
-    data_ssm = data_flat.T  # Shape: (n_timepoints, n_neurons)
-    
-    # Store results
-    results = {
-        'model': model,
-        'posterior': posterior,
-        'z_inferred': z_inferred,
-        'x_inferred': x_inferred,
-        'data_shape': data.shape,
-        'n_states': model.K,
-        'n_latent_dims': model.D,
-        'method': method
-    }
-    
-    # Plot trajectories if requested
-    if plot_trajectories:
-        fig, axes = plt.subplots(1, 2, figsize=(15, 6))
-        
-        # Plot latent state trajectories
-        plot_trajectory(z_inferred, x_inferred, ax=axes[0])
-        axes[0].set_title(f"Inferred Latent States ({method})")
-        axes[0].set_xlabel("Latent Dimension 1")
-        axes[0].set_ylabel("Latent Dimension 2")
-        
-        # Plot observations colored by state
-        plot_observations(z_inferred, data_ssm[:, :3], ax=axes[1])  # Show first 3 neurons
-        axes[1].set_title(f"Observations Colored by State ({method})")
-        axes[1].set_xlabel("Time")
-        axes[1].set_ylabel("Neural Activity")
-        
-        plt.tight_layout()
-        results['trajectory_plot'] = fig
-    
-    # Plot system dynamics if requested
-    if plot_dynamics:
-        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
-        
-        # Calculate appropriate limits
-        x_lim = abs(x_inferred).max(axis=0) + 1
-        plot_most_likely_dynamics(model, 
-                                 xlim=(-x_lim[0], x_lim[0]), 
-                                 ylim=(-x_lim[1], x_lim[1]), 
-                                 ax=ax)
-        ax.set_title(f"Inferred System Dynamics ({method})")
-        
-        plt.tight_layout()
-        results['dynamics_plot'] = fig
-    
-    # Plot ELBO convergence if requested
-    if plot_elbo and hasattr(posterior, 'elbos'):
-        fig, ax = plt.subplots(1, 1, figsize=(10, 6))
-        ax.plot(posterior.elbos, 'b-', linewidth=2)
-        ax.set_xlabel("Iteration")
-        ax.set_ylabel("ELBO")
-        ax.set_title(f"Convergence ({method})")
-        ax.grid(True, alpha=0.3)
-        
-        plt.tight_layout()
-        results['elbo_plot'] = fig
-    
-    return results
 
 
 def run_rslds_analysis(data, n_states=4, n_latent_dims=2, method="laplace_em", 
@@ -353,7 +179,7 @@ def run_rslds_analysis(data, n_states=4, n_latent_dims=2, method="laplace_em",
     
     # Analyze results
     if plot_results:
-        results = plot_rslds(model, posterior, data, method)
+        results = plot_rslds_summary(model, posterior, data, method=method)
     else:
         results = {
             'model': model,
@@ -364,7 +190,7 @@ def run_rslds_analysis(data, n_states=4, n_latent_dims=2, method="laplace_em",
         }
         # Still get inferred states for analysis
         results['z_inferred'], results['x_inferred'] = get_inferred_states(
-            model, posterior, data, method
+            model, posterior, data
         )
     
     print("=" * 60)
@@ -415,29 +241,29 @@ def compare_rslds_methods(data, n_states=4, n_latent_dims=2,
     )
     
     # Get inferred states
-    z_lem, x_lem = get_inferred_states(model_lem, posterior_lem, data, "laplace_em")
-    z_bbvi, x_bbvi = get_inferred_states(model_bbvi, posterior_bbvi, data, "bbvi")
+    z_lem, x_lem = get_inferred_states(model_lem, posterior_lem, data)
+    z_bbvi, x_bbvi = get_inferred_states(model_bbvi, posterior_bbvi, data)
     
     # Create comparison plots
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
     
     # Trajectory comparisons
-    plot_trajectory(z_lem, x_lem, ax=axes[0, 0])
+    plot_rslds_trajectory(z=z_lem, x=x_lem, ax=axes[0, 0])
     axes[0, 0].set_title("Laplace-EM: Latent States")
     
-    plot_trajectory(z_bbvi, x_bbvi, ax=axes[0, 1])
+    plot_rslds_trajectory(z=z_bbvi, x=x_bbvi, ax=axes[0, 1])
     axes[0, 1].set_title("BBVI: Latent States")
     
     # Dynamics comparisons
     x_lim_lem = abs(x_lem).max(axis=0) + 1
-    plot_most_likely_dynamics(model_lem, 
+    plot_rslds_dynamics(model=model_lem, 
                              xlim=(-x_lim_lem[0], x_lim_lem[0]), 
                              ylim=(-x_lim_lem[1], x_lim_lem[1]), 
                              ax=axes[0, 2])
     axes[0, 2].set_title("Laplace-EM: Dynamics")
     
     x_lim_bbvi = abs(x_bbvi).max(axis=0) + 1
-    plot_most_likely_dynamics(model_bbvi, 
+    plot_rslds_dynamics(model=model_bbvi, 
                              xlim=(-x_lim_bbvi[0], x_lim_bbvi[0]), 
                              ylim=(-x_lim_bbvi[1], x_lim_bbvi[1]), 
                              ax=axes[1, 0])
@@ -578,7 +404,7 @@ def save_rslds_model(model, posterior, data, results_folder, model_name="rslds_m
     if save_posterior:
         try:
             # Get inferred states
-            z_inferred, x_inferred = get_inferred_states(model, posterior, data, "laplace_em")
+            z_inferred, x_inferred = get_inferred_states(model, posterior, data)
             
             posterior_data = {
                 'z_inferred': z_inferred,
@@ -726,3 +552,242 @@ def list_saved_models(models_file):
         return []
 
 
+def plot_rslds_trajectory(model=None, posterior=None, data=None, method="laplace_em",
+    z=None, x=None, ax=None, 
+    line_style="-", line_width=2, colormap=None,
+    key_time=None, time_range=None, bin_size=None,
+    marker='x', marker_size=80, marker_color='red'
+):
+    if model is not None:
+        z, x = get_inferred_states(model, posterior, data, method=method)
+    else:
+        z = np.asarray(z)
+        x = np.asarray(x)
+
+    zcps = np.concatenate(([0], np.where(np.diff(z))[0] + 1, [z.size]))
+
+    if ax is None:
+        fig = plt.figure(figsize=(4, 4))
+        ax = fig.gca()
+    if colormap is None:
+        colormap = plt.get_cmap('Purples')
+    elif isinstance(colormap, str):
+        colormap = plt.get_cmap(colormap)
+
+    for start, stop in zip(zcps[:-1], zcps[1:]):
+        ax.plot(
+            x[start:stop + 1, 0],
+            x[start:stop + 1, 1],
+            lw=line_width, ls=line_style,
+            color=colormap(z[start] / (np.max(z) if np.max(z) > 0 else 1)),
+            alpha=1.0
+        )
+    # Add marker(s) for key_time if provided
+    if key_time is not None:
+        if not isinstance(key_time, (list, tuple, np.ndarray)):
+            key_time = [key_time]
+        for kt in key_time:
+            # Determine index for key_time
+            if time_range is not None and bin_size is not None:
+                # Map key_time (in seconds) to index
+                rel_kt = kt - time_range[0]
+                idx = int(round(rel_kt / bin_size))
+            else:
+                # Assume key_time is an integer index
+                idx = int(round(kt))
+            idx = max(0, min(idx, x.shape[0] - 1))
+            ax.scatter(
+                x[idx, 0], x[idx, 1],
+                marker=marker, color=marker_color, s=marker_size, zorder=10
+            )
+    return ax
+
+
+def plot_rslds_observations(model=None, posterior=None, data=None, method="laplace_em",
+                            z=None, y=None, n_neurons=3, 
+                            ax=None, line_style="-", line_width=2, colormap=None,
+                            key_time=None, time_range=None, bin_size=None,
+                            marker='x', marker_size=80, marker_color='red'):
+    if model is not None:
+        z, x = get_inferred_states(model, posterior, data, method=method)
+    else:
+        z = np.asarray(z)
+
+    if y is None:
+        if data is None: raise ValueError("data or y is required")
+        elif data is not None and data.ndim == 3:
+            data_flat = np.mean(data, axis=1)  # shape: (n_neurons, n_timebins)
+        else:
+            data_flat = data
+        data_ssm = data_flat.T  # Shape: (n_timepoints, n_neurons)
+        y = data_ssm[:, :n_neurons]
+
+    zcps = np.concatenate(([0], np.where(np.diff(z))[0] + 1, [z.size]))
+
+    if ax is None:
+        fig = plt.figure(figsize=(4, 4))
+        ax = fig.gca()
+    if colormap is None:
+        colormap = plt.get_cmap('Paired')
+    elif isinstance(colormap, str):
+        colormap = plt.get_cmap(colormap)
+
+    T, N = y.shape
+    t = np.arange(T)
+    for n in range(N):
+        for start, stop in zip(zcps[:-1], zcps[1:]):
+            ax.plot(t[start:stop + 1], y[start:stop + 1, n],
+                    lw=line_width, ls=line_style,
+                    color=colormap(z[start] / (np.max(z) if np.max(z) > 0 else 1)),
+                    alpha=1.0)
+    return ax
+
+
+
+def plot_rslds_dynamics(model=None,
+                        xlim=(-4, 4), ylim=(-3, 3), nxpts=20, nypts=20,
+                        alpha=0.8, ax=None, figsize=(3, 3), colormap=None):
+
+    if colormap is None:
+        colormap = plt.get_cmap('Paired')
+    elif isinstance(colormap, str):
+        colormap = plt.get_cmap(colormap)
+
+    K = model.K
+    assert model.D == 2
+    x = np.linspace(*xlim, nxpts)
+    y = np.linspace(*ylim, nypts)
+    X, Y = np.meshgrid(x, y)
+    xy = np.column_stack((X.ravel(), Y.ravel()))
+
+    # Get the probability of each state at each xy location
+    z = np.argmax(xy.dot(model.transitions.Rs.T) + model.transitions.r, axis=1)
+
+    if ax is None:
+        fig = plt.figure(figsize=figsize)
+        ax = fig.add_subplot(111)
+
+    for k, (A, b) in enumerate(zip(model.dynamics.As, model.dynamics.bs)):
+        dxydt_m = xy.dot(A.T) + b - xy
+
+        zk = z == k
+        if zk.sum(0) > 0:
+            ax.quiver(xy[zk, 0], xy[zk, 1],
+                      dxydt_m[zk, 0], dxydt_m[zk, 1],
+                      color=colormap(k / (K - 1)), alpha=alpha)
+
+    ax.set_xlabel('$x_1$')
+    ax.set_ylabel('$x_2$')
+
+    return ax
+
+
+def plot_rslds_elbo(elbos, ax=None):
+    if ax is None:
+        fig = plt.figure(figsize=(4, 4))
+        ax = fig.gca()
+    ax.plot(elbos, 'b-', linewidth=2)
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("ELBO")
+    ax.grid(True, alpha=0.3)
+    return ax
+
+def plot_rslds_summary(model, posterior, data, method="laplace_em",
+                plot_trajectories=True, plot_dynamics=True, plot_observations=True, plot_elbo=True,
+                n_neurons=3):
+    """
+    Comprehensive analysis of rSLDS results with automatic plotting.
+    
+    Parameters:
+    -----------
+    model : ssm.SLDS
+        Fitted rSLDS model
+    posterior : object
+        Posterior object from fitting
+    data : np.ndarray
+        Original input data
+    method : str
+        Method to use for inference: "laplace_em" or "bbvi"
+    new_fig : bool
+        Whether to create a new figure (default: True)
+    plot_trajectories : bool
+        Whether to plot state trajectories (default: False)
+    plot_dynamics : bool
+        Whether to plot system dynamics (default: False)
+    plot_observations : bool
+        Whether to plot observations (default: False)
+    plot_elbo : bool
+        Whether to plot ELBO convergence (default: False)
+        
+    Returns:
+    --------
+    results : dict
+        Dictionary containing all analysis results
+    """
+    # Get inferred states (default to laplace_em method)
+    z_inferred, x_inferred = get_inferred_states(model, posterior, data, method="laplace_em")
+    
+    # Handle different input shapes for plotting
+    if data.ndim == 3:
+        data_flat = np.mean(data, axis=1)  # shape: (n_neurons, n_timebins)
+    else:
+        data_flat = data
+    
+    data_ssm = data_flat.T  # Shape: (n_timepoints, n_neurons)
+    
+    # Store results
+    results = {
+        'model': model,
+        'posterior': posterior,
+        'z_inferred': z_inferred,
+        'x_inferred': x_inferred,
+        'data_shape': data.shape,
+        'n_states': model.K,
+        'n_latent_dims': model.D,
+        'method': 'laplace_em'  # Default method for plotting
+    }
+    
+    # Generate a figure with all the plots
+    n_plots = 0
+    if plot_trajectories or plot_dynamics: n_plots = 1
+    elif plot_observations: n_plots += 1
+    if plot_elbo: n_plots += 1
+    fig, axes = plt.subplots(1, n_plots, figsize=(20, 6))
+
+    # Plot system dynamics if requested
+    if plot_dynamics:
+        ax = axes[0]
+        x_lim = abs(x_inferred).max(axis=0) + 1 # Calculate appropriate limits
+        plot_rslds_dynamics(model, 
+                            xlim=(-x_lim[0], x_lim[0]), 
+                            ylim=(-x_lim[1], x_lim[1]), 
+                            ax=ax)
+        ax.set_title(f"Inferred System Dynamics ({method})")
+        results['dynamics_plot'] = fig
+
+    # Plot trajectory on top of dynamics
+    if plot_trajectories:
+        ax = axes[0]
+        plot_rslds_trajectory(z=z_inferred, x=x_inferred, ax=ax)
+        ax.set_title(f"Inferred Latent States ({method})")
+        ax.set_xlabel("Latent Dimension 1")
+        ax.set_ylabel("Latent Dimension 2")
+    
+    # Plot observations colored by state
+    if plot_observations:
+        ax = axes[1]
+        plot_rslds_observations(z=z_inferred, y=data_ssm[:, :n_neurons], ax=ax)  # Show first 3 neurons
+        ax.set_title(f"Observations Colored by State ({method})")
+        ax.set_xlabel("Time")
+        ax.set_ylabel("Neural Activity")
+        results['trajectory_plot'] = fig
+    
+    # Plot ELBO convergence if requested
+    if plot_elbo and hasattr(posterior, 'elbos'):
+        ax = axes[2]
+        plot_rslds_elbo(posterior.elbos, ax=ax)
+        ax.set_title(f"Convergence ({method})")
+        results['elbo_plot'] = fig
+    
+    plt.tight_layout()
+    return results

@@ -180,6 +180,7 @@ def combine_rates(data=None, key=None, rate_list=None, axis=1, chunks=None, targ
         Concatenated rate data along specified axis
     """
     # Handle key-based selection from aligned_data
+
     if key is not None and data is not None:
         if rate_list is not None:
             raise ValueError("Cannot specify both rate_list and key. Use one or the other.")
@@ -202,6 +203,10 @@ def combine_rates(data=None, key=None, rate_list=None, axis=1, chunks=None, targ
         # Extract rate data from matching keys
         rate_list = [data[k]['rate'] for k in matching_keys]
         print(f"Combining {len(matching_keys)} conditions: {matching_keys}")
+
+    if data is not None and key is None:
+        # If data is not None and key is None, use all keys in data
+        rate_list = [data[k]['rate'] for k in data.keys()]
     
     # Fallback to original behavior if no key-based selection
     if rate_list is None:
