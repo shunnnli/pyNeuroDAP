@@ -26,7 +26,7 @@ from .spikes import (
     make_orthogonal,
 )
 
-from .ssm import (
+from .models import (
     fit_rslds_model,
     get_inferred_states,
     plot_rslds,

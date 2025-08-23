@@ -1,8 +1,5 @@
-import pickle
-import copy
-
-import numpy as np
-import numpy.random as npr
+import autograd.numpy as np
+import autograd.numpy.random as npr
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -120,9 +117,9 @@ def fit_rslds_model(data, n_states=4, n_latent_dims=2, method="laplace_em",
     """
     # Import SSM only when needed
     try:
-        import ssm
+        import ssm.ssm as ssm
     except ImportError:
-        raise ImportError("SSM library not found. Please install it with: pip install ssm")
+        raise ImportError("SSM library not found. Please install it with: pip install -e . from the ssm directory")
     
     if random_seed is not None:
         npr.seed(random_seed)
