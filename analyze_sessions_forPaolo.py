@@ -70,8 +70,8 @@ for session_folder in session_folders:
     
     # Save metadata
     metadata = {
-        'experiment_type': 'opto_psth',
-        'subject_id': session_id,
+        'session_name': session_id,
+        'subject_id': 'SL326', # to be change later
         'recording_location': 'DCN',
         'laser_onset': laser_onset,
         'laser_duration': laser_duration,

@@ -5,8 +5,8 @@ import warnings
 from tqdm import tqdm
 
 def get_spikes(spikes, event_times, 
-               time_range,          # in seconds: (t_start, t_end), e.g. (-0.5, 1.0)
-               bin_size_ms=10,       # bin width in milliseconds (default 5 ms)
+               time_range=(-1, 2),  # in seconds: (t_start, t_end), e.g. (-0.5, 1.0)
+               bin_size_ms=25,       # bin width in milliseconds (default 5 ms)
                ap_fs=40000,         # fs of the ephys recording system
                same_system=True,
                params=None,
@@ -59,9 +59,8 @@ def get_spikes(spikes, event_times,
             warnings.warn("Please provide sync params if same_system==False")
             return [],[],[]
         else:
-            t_imec  = np.asarray(params['sync']['timeImec'])
-            t_ni    = np.asarray(params['sync']['timeNI'])
-
+            t_imec  = np.asarray(params['sync']['timeImec'][0])
+            t_ni    = np.asarray(params['sync']['timeNI'][0])
 
     # 3) determine units
     all_units = np.unique(spikes[:,1])
@@ -88,6 +87,7 @@ def get_spikes(spikes, event_times,
         iterator = tqdm(event_times, desc="Aligning spikes to events", leave=True)
     else:
         iterator = event_times
+    
     for i_ev, ev in enumerate(iterator):
         if np.isnan(ev):
             # turn the corresponding row into all nan and continue
