@@ -77,6 +77,12 @@ from .gui import (
     select_sessions
 )
 
+from .mat import (
+    load_mat,
+    convert_params_from_mat,
+    convert_spikes_from_mat
+)
+
 # Define what gets imported with "from pyNeuroDAP import *"
 __all__ = [
     # Core spike analysis
@@ -133,5 +139,10 @@ __all__ = [
     'create_session_gui',
     'create_parameter_gui',
     'generate_default_save_path',
-    'select_sessions'
+    'select_sessions',
+    
+    # MATLAB file utilities
+    'load_mat',
+    'convert_params_from_mat',
+    'convert_spikes_from_mat'
 ]

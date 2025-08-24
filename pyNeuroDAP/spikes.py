@@ -5,6 +5,128 @@ import warnings
 from tqdm import tqdm
 
 def get_spikes(spikes, event_times, 
+                    time_range=(-1, 2),      # seconds
+                    bin_size_ms=25,
+                    ap_fs=30000,
+                    same_system=True,
+                    params=None,
+                    include_units=None,
+                    verbose=False):
+
+    bin_size = bin_size_ms / 1000.0
+    n_bins   = int(np.round((time_range[1] - time_range[0]) / bin_size))
+    samples_per_bin = int(np.round(bin_size * ap_fs))
+    t0_samps = int(np.round(time_range[0] * ap_fs))
+    t1_samps = int(np.round(time_range[1] * ap_fs))
+
+    # ----- sync: NI → imec (vectorized) -----
+    event_times = np.asarray(event_times)
+    if not same_system:
+        if params is None or 'sync' not in params:
+            raise ValueError("Provide params['sync'] with 'timeImec' and 'timeNI'.")
+        t_imec = np.asarray(params['sync']['timeImec'][0])  # seconds, monotonic
+        t_ni   = np.asarray(params['sync']['timeNI'][0])    # seconds, monotonic
+
+        # If event_times are NI *sample indices*, convert to seconds; otherwise assume seconds
+        if np.issubdtype(event_times.dtype, np.integer):
+            ev_sec = t_ni[event_times]
+        else:
+            ev_sec = event_times.astype(float)
+
+        # Map seconds → imec sample index (nearest)
+        # searchsorted is O(log N) vs argmin O(N)
+        centers = np.searchsorted(t_imec, ev_sec, side='left')
+        # clamp to valid range
+        centers = np.clip(centers, 0, len(t_imec) - 1).astype(np.int64)
+    else:
+        # same system: event_times given in seconds
+        centers = np.round(event_times * ap_fs).astype(np.int64)
+
+    # Vectorized window edges
+    starts = centers + t0_samps
+    ends   = centers + t1_samps
+
+    # ----- prep units -----
+    all_units = np.unique(spikes[:, 1].astype(int))
+    include_units = all_units if include_units is None else np.asarray(include_units, int)
+    n_units = len(include_units)
+
+    # fast unit lookup LUT
+    max_unit = int(all_units.max()) if all_units.size else -1
+    lut = -np.ones(max_unit + 1, dtype=int)
+    lut[include_units] = np.arange(n_units, dtype=int)
+
+    # ----- sort spikes once by time -----
+    samp = spikes[:, 0].astype(np.int64)
+    unit = spikes[:, 1].astype(int)
+    order = np.argsort(samp)
+    samp = samp[order]
+    unit = unit[order]
+
+    # ----- outputs -----
+    spike_count = np.zeros((n_units, len(centers), n_bins), dtype=np.float32)
+    spike_times = [[[] for _ in range(len(centers))] for _ in range(n_units)]
+
+    it = tqdm(range(len(centers)), disable=not verbose, desc="Aligning spikes")
+    for j in it:
+        if np.isnan(centers[j]):  # rare
+            for u in range(n_units):
+                spike_count[u, j, :] = np.nan
+                spike_times[u][j] = np.array([])
+            continue
+
+        # slice spikes in window via binary searches (no full-array masks)
+        lo = np.searchsorted(samp, starts[j], side='left')
+        hi = np.searchsorted(samp, ends[j],   side='right')
+        if lo >= hi:
+            continue
+
+        s = samp[lo:hi]
+        u = unit[lo:hi]
+        ui = lut[u]
+        valid = ui >= 0
+        if not np.any(valid):
+            continue
+
+        s = s[valid]; ui = ui[valid]
+
+        # integer bin indices
+        bins = ((s - starts[j]) // samples_per_bin).astype(int)
+        keep = (bins >= 0) & (bins < n_bins)
+        if not np.any(keep):
+            continue
+        bins = bins[keep]; ui = ui[keep]; s = s[keep]
+
+        # accumulate counts
+        np.add.at(spike_count[:, j, :], (ui, bins), 1)
+
+        # save relative spike times (time zero = event center)
+        rel_t = (s - centers[j]) / float(ap_fs)
+        for k in range(rel_t.size):
+            spike_times[ui[k]][j].append(rel_t[k])
+
+    # finalize times
+    for u in range(n_units):
+        for j in range(len(centers)):
+            spike_times[u][j] = np.asarray(spike_times[u][j], dtype=float)
+
+    spike_rate = spike_count / bin_size
+    aligned = {
+        "count": spike_count,
+        "rate": spike_rate,
+        "times": spike_times,
+        "params": {
+            "bin_size_ms": bin_size_ms,
+            "time_range": time_range,
+            "n_events": len(centers),
+            "n_timestep": n_bins,
+            "event_bin": int(np.round(abs(time_range[0]) / bin_size)),
+            "units": include_units,
+        },
+    }
+    return aligned
+
+def get_spikes_slow(spikes, event_times, 
                time_range=(-1, 2),  # in seconds: (t_start, t_end), e.g. (-0.5, 1.0)
                bin_size_ms=25,       # bin width in milliseconds (default 5 ms)
                ap_fs=40000,         # fs of the ephys recording system
