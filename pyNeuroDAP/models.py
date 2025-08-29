@@ -25,7 +25,7 @@ def _one_hot_from_labels(labels):
     return inv, {c: i for i, c in enumerate(classes)}, len(classes)
 
 
-def prepare_rslds_data(data, trial_types=None):
+def prepare_rslds_data(data, trial_types=None, zscore=True):
     """
     Prepare observations (and optional trial-type inputs) for rSLDS.
 
@@ -34,16 +34,34 @@ def prepare_rslds_data(data, trial_types=None):
                                If trial_types provided, also return list U
                                of length S with arrays (T, M) (one-hot).
     """
+
     # 2D: keep old behavior; we can't recover trial boundaries to build inputs
     if getattr(data, "ndim", None) == 2:
         if trial_types is not None:
             print("[prepare_rslds_data] trial_types ignored for 2D input.")
-        return data
+        if zscore:
+            X = data if data.shape[0] > data.shape[1] else data.T  # (T,N)
+            mu  = np.nanmean(X, axis=0)
+            sig = np.nanstd(X, axis=0, ddof=0)
+            sig = np.where((sig == 0) | ~np.isfinite(sig), 1.0, sig)
+            Xz  = (X - mu) / sig
+            return Xz if data.shape[0] > data.shape[1] else Xz.T
+        else:
+            return data
 
     # 3D: list-of-trials by default
     if getattr(data, "ndim", None) == 3:
         N, S, T = data.shape
         Y = [data[:, i, :].T.copy() for i in range(S)]  # (T, N) per trial
+
+        if zscore:
+            flat = data.reshape(N, -1)                      # (N, S*T)
+            mu  = np.nanmean(flat, axis=1)                  # (N,)
+            sig = np.nanstd(flat, axis=1, ddof=0)           # (N,)
+            # avoid divide-by-zero / all-NaN channels
+            sig = np.where((sig == 0) | ~np.isfinite(sig), 1.0, sig)
+            mu  = np.where(~np.isfinite(mu), 0.0, mu)
+            Y   = [(y - mu) / sig for y in Y]               # each y: (T, N)
 
         if trial_types is None:
             return Y
@@ -81,7 +99,7 @@ def fit_rslds_model(data, n_states=4, n_latent_dims=2, method="laplace_em", tria
     if random_seed is not None:
         npr.seed(random_seed)
 
-    # Allow callers to pass either raw 3D, the prepared list, or (Y,U) tuple.  (unchanged)
+    # ---- Allow callers to pass either raw 3D, the prepared list, or (Y,U) tuple.  ----
     if isinstance(data, tuple):
         Y, U = data
     else:
@@ -91,7 +109,7 @@ def fit_rslds_model(data, n_states=4, n_latent_dims=2, method="laplace_em", tria
         else:
             Y, U = prepared, None
 
-    # --- Minimal fix: build data_ssm from Y (the prepared observations) ---
+    # --- build data_ssm from Y (the prepared observations) ---
     if isinstance(Y, list):
         data_ssm = Y
         N = data_ssm[0].shape[1]
@@ -103,13 +121,13 @@ def fit_rslds_model(data, n_states=4, n_latent_dims=2, method="laplace_em", tria
             data_ssm = Y
         N = data_ssm.shape[1]
 
-    # --- Minimal fix: declare emissions input_dim when U is present ---
+    # Feed input dim to the model
     emission_kwargs = {}
     M = 0
     if U is not None:
         M = U[0].shape[1] if isinstance(U, list) else U.shape[1]
 
-    # Create rSLDS model (original options preserved)
+    # Create rSLDS model
     model = ssm.SLDS(
         N, n_states, n_latent_dims,
         M=M,
@@ -117,20 +135,19 @@ def fit_rslds_model(data, n_states=4, n_latent_dims=2, method="laplace_em", tria
         dynamics=dynamics,
         emissions=emissions,
         single_subspace=True,
-        emission_kwargs=emission_kwargs     # NEW
+        emission_kwargs=emission_kwargs
     )
 
-    # Initialize model (pass inputs so emissions can use them)  # NEW
+    # Initialize model (pass inputs so emissions can use them)
     print("Initializing model...")
-    print("Fs shape:", model.emissions.Fs.shape)
-    model.initialize(data_ssm, inputs=U)      # NEW
+    model.initialize(data_ssm, inputs=U, num_init_iters=100,num_init_restarts=5)    
 
     # Fit model (pass inputs here too)
     print(f"Fitting rSLDS with {method} method...")
     if method == "laplace_em":
         elbos, posterior = model.fit(
             data_ssm,
-            inputs=U,                         # NEW
+            inputs=U,                        
             method="laplace_em",
             variational_posterior=variational_posterior,
             initialize=False,
@@ -140,7 +157,7 @@ def fit_rslds_model(data, n_states=4, n_latent_dims=2, method="laplace_em", tria
     elif method == "bbvi":
         elbos, posterior = model.fit(
             data_ssm,
-            inputs=U,                         # NEW
+            inputs=U,                        
             method="bbvi",
             variational_posterior="meanfield",
             initialize=False,
