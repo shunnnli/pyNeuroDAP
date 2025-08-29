@@ -62,6 +62,7 @@ def prepare_rslds_data(data, trial_types=None, zscore=True):
             sig = np.where((sig == 0) | ~np.isfinite(sig), 1.0, sig)
             mu  = np.where(~np.isfinite(mu), 0.0, mu)
             Y   = [(y - mu) / sig for y in Y]               # each y: (T, N)
+            print("[prepare_rslds_data] Data z-scored")
 
         if trial_types is None:
             return Y
