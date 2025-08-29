@@ -59,8 +59,11 @@ def prepare_rslds_data(data, trial_types=None, zscore=True):
                                of length S with arrays (T, M) (one-hot).
     """
 
+    # Make sure data is a numpy array
+    data = np.asarray(data)
+
     # 2D: keep old behavior; we can't recover trial boundaries to build inputs
-    if getattr(data, "ndim", None) == 2:
+    if data.ndim == 2:
         if trial_types is not None:
             print("[prepare_rslds_data] trial_types ignored for 2D input.")
         if zscore:
@@ -74,7 +77,7 @@ def prepare_rslds_data(data, trial_types=None, zscore=True):
             return data
 
     # 3D: list-of-trials by default
-    if getattr(data, "ndim", None) == 3:
+    if data.ndim == 3:
         N, S, T = data.shape
         Y = [data[:, i, :].T.copy() for i in range(S)]  # (T, N) per trial
 
