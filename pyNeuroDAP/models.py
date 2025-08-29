@@ -10,8 +10,17 @@ colors = sns.xkcd_palette(color_names)
 sns.set_style("white")
 sns.set_context("talk")
 
-# Note: ssm import is only needed when actually using SSM functions
-# We'll import it dynamically in the functions that need it
+
+# Import SSM only when needed
+try:
+    import ssm.ssm as ssm
+    from ssm.util import find_permutation
+except ImportError:
+    try:
+        import ssm
+        from ssm.util import find_permutation
+    except ImportError:
+        raise ImportError("SSM library not found. Please install it with: pip install -e . from the ssm directory")
 
 # =============================================================================
 # Main Wrapper Functions for rSLDS Analysis
@@ -23,6 +32,21 @@ def _one_hot_from_labels(labels):
         labels = labels.astype(int)
     classes, inv = np.unique(labels, return_inverse=True)
     return inv, {c: i for i, c in enumerate(classes)}, len(classes)
+
+def _unwrap_Y_U(data):
+    """
+    Accepts:
+      - list of Y_i (each (T_i, N))
+      - array Y (T,N) or (N,T)
+      - tuple (Y, U) where Y is as above and U is list/array (T_i, M)
+    Returns:
+      Y (list or array), U (list or array or None)
+    """
+    if isinstance(data, tuple):
+        Y, U = data
+    else:
+        Y, U = data, None
+    return Y, U
 
 
 def prepare_rslds_data(data, trial_types=None, zscore=True):
@@ -173,7 +197,7 @@ def fit_rslds_model(data, n_states=4, n_latent_dims=2, method="laplace_em", tria
 
 
 
-def get_inferred_states(model, posterior, data, method="laplace_em", z=None):
+def get_inferred_states_old(model, posterior, data, method="laplace_em", z=None):
     """
     Extract inferred discrete and continuous states from fitted model.
     
@@ -196,17 +220,6 @@ def get_inferred_states(model, posterior, data, method="laplace_em", z=None):
         If the input was a list of trials, both are lists (one per trial).
         Otherwise they are 2D arrays.
     """
-    # Import SSM only when needed
-    try:
-        import ssm.ssm as ssm
-        from ssm.util import find_permutation
-    except ImportError:
-        try:
-            import ssm
-            from ssm.util import find_permutation
-        except ImportError:
-            raise ImportError("SSM library not found. Please install it with: pip install -e . from the ssm directory")
-    
     # Prepare data in SSM orientation
     if isinstance(data, list):
         data_ssm = data
@@ -249,6 +262,44 @@ def get_inferred_states(model, posterior, data, method="laplace_em", z=None):
         z_inferred = model.most_likely_states(x_inferred, data_ssm)
     
     return z_inferred, x_inferred
+
+
+def get_inferred_states(model, posterior, data):
+    """
+    Returns (z_inferred, x_inferred).
+    - If data is a list (or (Y,U) with Y a list), returns two lists.
+    - If data is a single array (or (Y,U) with Y an array), returns arrays.
+    """
+    Y, U = _unwrap_Y_U(data)
+
+    # Posterior mean continuous states may be list or array depending on how you fit
+    pcs = posterior.mean_continuous_states
+
+    # LIST OF TRIALS
+    if isinstance(Y, list):
+        x_list = list(pcs) if isinstance(pcs, (list, tuple)) else [pcs]
+        assert len(x_list) == len(Y), "posterior trials != data trials"
+        # build z_i with matching Y_i, U_i (if provided)
+        z_list = []
+        for i, x_i in enumerate(x_list):
+            Y_i = Y[i]
+            U_i = (U[i] if isinstance(U, list) else U) if U is not None else None
+            # ssm expects (T,N) for Y_i and optional inputs U_i with matching T. :contentReference[oaicite:1]{index=1}
+            z_i = model.most_likely_states(x_i, Y_i, input=U_i)
+            z_list.append(z_i)
+        return z_list, x_list
+
+    # SINGLE SEQUENCE
+    else:
+        # make sure Y is (T,N)
+        Y_2d = Y if Y.shape[0] >= Y.shape[1] else Y.T
+        x = pcs if not isinstance(pcs, (list, tuple)) else pcs[0]
+        U_2d = U
+        if U_2d is not None and isinstance(U_2d, list):
+            # user passed a single-trial list; take first
+            U_2d = U_2d[0]
+        z = model.most_likely_states(x, Y_2d, input=U_2d)
+        return z, x
 
 
 
@@ -402,242 +453,139 @@ def compare_rslds_methods(data, n_states=4, n_latent_dims=2,
     return comparison
 
 
-def save_rslds_model(model, posterior, data, results_folder, model_name="rslds_model", 
-                     save_posterior=True, save_data_sample=True):
-    """
-    Save rSLDS model and results to an HDF5 file in the results folder.
-    
-    Parameters:
-    -----------
-    model : ssm.SLDS
-        Fitted rSLDS model
-    posterior : object
-        Posterior object from fitting
-    data : np.ndarray
-        Original input data used for fitting
-    results_folder : str
-        Path to the results folder where to save the model
-    model_name : str
-        Name for the model in the HDF5 file (default: "rslds_model")
-    save_posterior : bool
-        Whether to save posterior samples (default: True)
-    save_data_sample : bool
-        Whether to save a sample of the input data (default: True)
-        
-    Returns:
-    --------
-    filepath : str
-        Path to the saved HDF5 file
-    """
-    import os
-    from pathlib import Path
-    import h5py
-    
-    # Ensure results folder exists
-    results_path = Path(results_folder)
-    results_path.mkdir(parents=True, exist_ok=True)
-    
-    # Create filepath for models.h5
-    models_file = results_path / "models.h5"
-    
-    # Prepare model data for saving
-    model_data = {
-        'model_type': 'rSLDS',
-        'n_states': model.K,
-        'n_latent_dims': model.D,
-        'n_neurons': model.D_obs,
-        'transitions_type': 'recurrent_only',
-        'dynamics_type': 'diagonal_gaussian',
-        'emissions_type': 'gaussian_orthog'
-    }
-    
-    # Save model parameters
-    try:
-        # Dynamics parameters
-        if hasattr(model.dynamics, 'As'):
-            model_data['dynamics_As'] = np.array(model.dynamics.As)
-        if hasattr(model.dynamics, 'bs'):
-            model_data['dynamics_bs'] = np.array(model.dynamics.bs)
-        if hasattr(model.dynamics, 'sigmasq'):
-            model_data['dynamics_sigmasq'] = np.array(model.dynamics.sigmasq)
-        if hasattr(model.dynamics, 'mu_init'):
-            model_data['dynamics_mu_init'] = np.array(model.dynamics.mu_init)
-        if hasattr(model.dynamics, 'sigmasq_init'):
-            model_data['dynamics_sigmasq_init'] = np.array(model.dynamics.sigmasq_init)
-        
-        # Transition parameters
-        if hasattr(model.transitions, 'Rs'):
-            model_data['transitions_Rs'] = np.array(model.transitions.Rs)
-        if hasattr(model.transitions, 'r'):
-            model_data['transitions_r'] = np.array(model.transitions.r)
-        
-        # Emission parameters
-        if hasattr(model.emissions, 'Cs'):
-            model_data['emissions_Cs'] = np.array(model.emissions.Cs)
-        if hasattr(model.emissions, 'ds'):
-            model_data['emissions_ds'] = np.array(model.emissions.ds)
-        if hasattr(model.emissions, 'Fs'):
-            model_data['emissions_Fs'] = np.array(model.emissions.Fs)
-        if hasattr(model.emissions, 'inv_etas'):
-            model_data['emissions_inv_etas'] = np.array(model.emissions.inv_etas)
-            
-    except Exception as e:
-        print(f"Warning: Could not save some model parameters: {e}")
-    
-    # Save posterior information if requested
-    if save_posterior:
-        try:
-            # Get inferred states
-            z_inferred, x_inferred = get_inferred_states(model, posterior, data)
-            
-            posterior_data = {
-                'z_inferred': z_inferred,
-                'x_inferred': x_inferred,
-                'n_timepoints': len(z_inferred)
-            }
-            
-            # Add posterior data to model_data
-            model_data.update(posterior_data)
-            
-        except Exception as e:
-            print(f"Warning: Could not save posterior data: {e}")
-    
-    # Save data sample if requested
-    if save_data_sample:
-        try:
-            # Save a sample of the input data
-            if data.ndim == 3:
-                # For 3D data, save first few trials
-                n_trials_sample = min(5, data.shape[1])
-                data_sample = data[:, :n_trials_sample, :]
-                model_data['data_sample'] = data_sample
-                model_data['data_sample_info'] = f"First {n_trials_sample} trials of original data"
-            else:
-                # For 2D data, save as is
-                model_data['data_sample'] = data
-                model_data['data_sample_info'] = "Original data (2D)"
-                
-        except Exception as e:
-            print(f"Warning: Could not save data sample: {e}")
-    
-    # Save metadata
-    model_data['fitting_timestamp'] = str(Path().cwd())
-    model_data['data_shape'] = str(data.shape)
-    
-    # Save to HDF5 file
-    try:
-        with h5py.File(models_file, 'a') as f:
-            # Create group for this model
-            if model_name in f:
-                del f[model_name]  # Remove existing model with same name
-            
-            model_group = f.create_group(model_name)
-            
-            # Save all model data
-            for key, value in model_data.items():
-                if isinstance(value, np.ndarray):
-                    model_group.create_dataset(key, data=value, compression='gzip')
-                else:
-                    model_group.attrs[key] = value
-            
-            print(f"rSLDS model saved to {models_file} under key '{model_name}'")
-            
-    except Exception as e:
-        print(f"Error saving model: {e}")
+# -----------------------------------------------------------------------------
+# Save/load rSLDS model
+# -----------------------------------------------------------------------------
+
+import numpy as np
+import joblib
+
+def _to_list(arr_or_list):
+    if arr_or_list is None:
         return None
-    
-    return str(models_file)
+    if isinstance(arr_or_list, list):
+        return [np.asarray(a) for a in arr_or_list]
+    # single sequence: accept (T,N) or (N,T) and return list with one (T,N)
+    A = np.asarray(arr_or_list)
+    return [A if A.shape[0] >= A.shape[1] else A.T]
 
 
-def load_rslds_model(models_file, model_name="rslds_model"):
+
+import datetime
+def save_rslds_model(model, posterior, data, bundle_name="rslds_run.joblib", *, elbos=None, compress=3):
     """
-    Load a saved rSLDS model from an HDF5 file.
-    
-    Parameters:
-    -----------
-    models_file : str
-        Path to the models.h5 file
-    model_name : str
-        Name of the model to load (default: "rslds_model")
-        
-    Returns:
-    --------
-    model_data : dict
-        Dictionary containing the loaded model data
+    Save everything needed to recreate plots—no re-fit required.
+    `data` can be Y or (Y, U) from prepare_rslds_data.
     """
-    from pathlib import Path
-    import h5py
-    
-    models_path = Path(models_file)
-    if not models_path.exists():
-        raise FileNotFoundError(f"Models file not found: {models_file}")
-    
-    model_data = {}
-    
-    try:
-        with h5py.File(models_file, 'r') as f:
-            if model_name not in f:
-                raise KeyError(f"Model '{model_name}' not found in {models_file}")
-            
-            model_group = f[model_name]
-            
-            # Load datasets
-            for key in model_group.keys():
-                if isinstance(model_group[key], h5py.Dataset):
-                    model_data[key] = model_group[key][:]
-            
-            # Load attributes
-            for key in model_group.attrs.keys():
-                model_data[key] = model_group.attrs[key]
-                
-        print(f"rSLDS model '{model_name}' loaded from {models_file}")
-        
-    except Exception as e:
-        print(f"Error loading model: {e}")
-        return None
-    
-    return model_data
+    Y, U   = _unwrap_Y_U(data)
+    Y_list = _to_list(Y)
+    U_list = _to_list(U)
+
+    # Posterior latents (lists by trial)
+    pcs = posterior.mean_continuous_states
+    x_list = list(pcs) if isinstance(pcs, (list, tuple)) else [pcs]
+
+    # Most-likely discrete states per trial (store them so we don't recompute)
+    z_list = []
+    for i, x_i in enumerate(x_list):
+        Yi = Y_list[i] if Y_list is not None else None
+        Ui = U_list[i] if U_list is not None else None
+        try:
+            z_i = model.most_likely_states(x_i, Yi, inputs=Ui)
+        except Exception:
+            z_i = None
+        z_list.append(z_i)
+
+    # Lightweight metadata + core parameters you might want without instantiating
+    params = {}
+    for name in ("As","bs","sigmasq","mu_init","sigmasq_init"):
+        if hasattr(model.dynamics, name):
+            params[f"dynamics_{name}"] = getattr(model.dynamics, name)
+    for name in ("Cs","ds","Fs","inv_etas"):
+        if hasattr(model.emissions, name):
+            params[f"emissions_{name}"] = getattr(model.emissions, name)
+    for name in ("Rs","r","log_Ps"):
+        if hasattr(model.transitions, name):
+            params[f"transitions_{name}"] = getattr(model.transitions, name)
+
+    bundle = dict(
+        meta=dict(
+            model_class=type(model).__name__,
+            transitions_class=type(model.transitions).__name__,
+            dynamics_class=type(model.dynamics).__name__,
+            emissions_class=type(model.emissions).__name__,
+            K=model.K, D=model.D, N=model.N,
+            M=getattr(model, "M", getattr(model.transitions, "M",
+                 getattr(model.emissions, "M", 0))),
+            single_subspace=getattr(model.emissions, "single_subspace", None),
+        ),
+        params=params,
+        posterior=dict(x_list=x_list, z_list=z_list,
+                       elbos=np.asarray(elbos) if elbos is not None else None),
+        data=dict(Y_list=Y_list, U_list=U_list),
+        # also tuck originals so you can keep using your existing plotting funcs
+        objects=dict(model=model, posterior=posterior)
+    )
+
+    # Create save path
+    today = datetime.now().strftime("%Y%m%d")
+    save_path = f"results-{today}/{bundle_name}"
+    joblib.dump(bundle, save_path, compress=compress)
+    return save_path
 
 
-def list_saved_models(models_file):
+def load_rslds_model(save_path):
+    """Return the dict saved by save_rslds_bundle."""
+    return joblib.load(save_path)
+
+
+
+# -------------------------------------------------
+# Plotting functions
+# -------------------------------------------------
+
+
+def plot_rslds_trajectory(model=None, posterior=None, data=None,
+                          trial_idx=0, x=None, z=None, ax=None,
+                          cmap='viridis', lw=2, alpha=0.95):
     """
-    List all saved models in a models.h5 file.
-    
-    Parameters:
-    -----------
-    models_file : str
-        Path to the models.h5 file
-        
-    Returns:
-    --------
-    models : list
-        List of model names in the file
+    Plot a single-trial latent trajectory in 2D, colored by discrete state.
+    Works with:
+      - data = Y or (Y, U) where Y is list[(T_i,N)] or array (T,N)/(N,T)
+      - or with precomputed x, z.
     """
-    from pathlib import Path
-    import h5py
-    
-    models_path = Path(models_file)
-    if not models_path.exists():
-        print(f"Models file not found: {models_file}")
-        return []
-    
-    try:
-        with h5py.File(models_file, 'r') as f:
-            models = list(f.keys())
-            
-        print(f"Found {len(models)} models in {models_file}:")
-        for model in models:
-            print(f"  - {model}")
-            
-        return models
-        
-    except Exception as e:
-        print(f"Error reading models file: {e}")
-        return []
+    from matplotlib.collections import LineCollection
+    # If x/z not provided, compute from model/posterior and the *matching* Y_i, U_i
+    if x is None or z is None:
+        assert (model is not None) and (posterior is not None) and (data is not None)
+        Y, U = _unwrap_Y_U(data)
+        pcs = posterior.mean_continuous_states
+        x = pcs[trial_idx] if isinstance(pcs, (list, tuple)) else pcs
+        if x.shape[1] > 2:
+            x = x[:, :2]  # project first 2 dims for plotting
+        Y_i = Y[trial_idx] if isinstance(Y, list) else (Y if Y.shape[0] >= Y.shape[1] else Y.T)
+        U_i = U[trial_idx] if (U is not None and isinstance(U, list)) else U
+        z = model.most_likely_states(x, Y_i, input=U_i)  # per-trial Viterbi. :contentReference[oaicite:3]{index=3}
+
+    x = np.asarray(x); z = np.asarray(z)
+    assert x.ndim == 2 and x.shape[1] == 2, f"x must be (T,2); got {x.shape}"
+    assert z.shape[0] == x.shape[0], "z and x must share T"
+
+    # Color each segment (x_t -> x_{t+1}) by z_t; avoids jumps across gaps
+    seg = np.stack([x[:-1], x[1:]], axis=1)       # (T-1, 2, 2)
+    lc = LineCollection(seg, cmap=cmap, linewidths=lw, alpha=alpha)
+    lc.set_array(z[:-1].astype(float))
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(5, 5))
+    ax.add_collection(lc)
+    ax.scatter(x[0, 0], x[0, 1], c="red", s=50, marker="x", zorder=5)
+    ax.autoscale()
+    ax.set_xlabel("x1"); ax.set_ylabel("x2")
+    return ax
 
 
-
-def plot_rslds_trajectory(model=None, posterior=None, data=None, method="laplace_em",
+def plot_rslds_trajectory_old(model=None, posterior=None, data=None, 
+                          method="laplace_em", zscore=True, trial_types=None,
                             z=None, x=None, ax=None, 
                             line_style="-", line_width=2, color=None, label=None,
                             key_time=None, time_range=None, bin_size=None,
@@ -649,7 +597,7 @@ def plot_rslds_trajectory(model=None, posterior=None, data=None, method="laplace
     """
     # Prepare data
     if data is not None:
-        data = prepare_rslds_data(data)
+        data, inputs = prepare_rslds_data(data, zscore=zscore, trial_types=trial_types)
     # Infer states if needed
     if model is not None and posterior is not None and (x is None or z is None):
         z, x = get_inferred_states(model, posterior, data, method=method)
@@ -688,8 +636,28 @@ def plot_rslds_trajectory(model=None, posterior=None, data=None, method="laplace
     return ax
 
 
+def plot_rslds_observations(model, posterior, data, trial_idx=0, neuron_idx=0, ax=None):
+    """
+    Simple raster/trace overlay with z coloring for a chosen neuron & trial.
+    """
+    Y, U = _unwrap_Y_U(data)
+    Y_i = Y[trial_idx] if isinstance(Y, list) else (Y if Y.shape[0] >= Y.shape[1] else Y.T)
+    pcs = posterior.mean_continuous_states
+    x_i = pcs[trial_idx] if isinstance(pcs, (list, tuple)) else pcs
+    z_i = model.most_likely_states(x_i, Y_i, input=(U[trial_idx] if isinstance(U, list) else U))
+    y_i = Y_i[:, neuron_idx]
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6, 2))
+    ax.plot(y_i, lw=1.0, color="k", alpha=0.6)
+    # overlay state as colored background (fast & simple)
+    for t in range(len(z_i)):
+        ax.axvspan(t-0.5, t+0.5, color=plt.cm.tab10(z_i[t] % 10), alpha=0.08)
+    ax.set_title(f"Trial {trial_idx}, neuron {neuron_idx}")
+    ax.set_xlabel("time (bins)"); ax.set_ylabel("rate")
+    return ax
 
-def plot_rslds_observations(model=None, posterior=None, data=None, method="laplace_em",
+
+def plot_rslds_observations_old(model=None, posterior=None, data=None, method="laplace_em",
                             z=None, y=None, n_neurons=3, 
                             ax=None, line_style="-", line_width=2, color=None, label=None,
                             key_time=None, time_range=None, bin_size=None,

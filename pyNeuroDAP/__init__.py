@@ -40,7 +40,6 @@ from .models import (
     compare_rslds_methods,
     save_rslds_model,
     load_rslds_model,
-    list_saved_models,
     prepare_rslds_data,
 )
 
@@ -113,7 +112,6 @@ __all__ = [
     'compare_rslds_methods',
     'save_rslds_model',
     'load_rslds_model',
-    'list_saved_models',
     'prepare_rslds_data',
     
     # Trial management
