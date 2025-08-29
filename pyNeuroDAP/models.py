@@ -325,7 +325,7 @@ def _to_list(arr_or_list):
 
 
 
-import datetime
+
 def save_rslds_model(model, posterior, data, bundle_name="rslds_run.joblib", *, elbos=None, compress=3):
     """
     Save everything needed to recreate plots—no re-fit required.
@@ -382,8 +382,13 @@ def save_rslds_model(model, posterior, data, bundle_name="rslds_run.joblib", *, 
     )
 
     # Create save path
+    from datetime import datetime
+    import os
     today = datetime.now().strftime("%Y%m%d")
-    save_path = f"Results/rslds_models/rslds-{today}/{bundle_name}"
+    save_path = f"Results/rslds_models/rslds-{today}/"
+    # Make directory if it doesn't exist
+    os.makedirs(save_path, exist_ok=True)
+    save_path = f"{save_path}/{bundle_name}"
     joblib.dump(bundle, save_path, compress=compress)
     return save_path
 
