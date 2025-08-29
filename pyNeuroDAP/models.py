@@ -10,7 +10,6 @@ colors = sns.xkcd_palette(color_names)
 sns.set_style("white")
 sns.set_context("talk")
 
-import joblib
 
 # Import SSM only when needed
 try:
@@ -312,7 +311,8 @@ def get_inferred_states(model, posterior, data, method="laplace_em"):
 # Save/load rSLDS model
 # -----------------------------------------------------------------------------
 
-
+import numpy as np
+import joblib
 
 def _to_list(arr_or_list):
     if arr_or_list is None:
@@ -324,6 +324,8 @@ def _to_list(arr_or_list):
     return [A if A.shape[0] >= A.shape[1] else A.T]
 
 
+
+import datetime
 def save_rslds_model(model, posterior, data, bundle_name="rslds_run.joblib", *, elbos=None, compress=3):
     """
     Save everything needed to recreate plots—no re-fit required.
@@ -380,7 +382,6 @@ def save_rslds_model(model, posterior, data, bundle_name="rslds_run.joblib", *, 
     )
 
     # Create save path
-    from datetime import datetime
     today = datetime.now().strftime("%Y%m%d")
     save_path = f"Results/rslds_models/rslds-{today}/{bundle_name}"
     joblib.dump(bundle, save_path, compress=compress)
@@ -576,7 +577,7 @@ def get_plot_lims(posterior, method="laplace_em"):
 
 
 def plot_rslds_dynamics(model=None, posterior=None, method="laplace_em",
-                        xlim=(-4, 4), ylim=(-3, 3), nxpts=20, nypts=20,
+    xlim=(-4, 4), ylim=(-3, 3), nxpts=20, nypts=20,
                         alpha=0.8, ax=None, figsize=(3, 3), colormap=None):
 
     # Get the limits for the plot
@@ -587,7 +588,7 @@ def plot_rslds_dynamics(model=None, posterior=None, method="laplace_em",
         colormap = plt.get_cmap('Paired')
     elif isinstance(colormap, str):
         colormap = plt.get_cmap(colormap)
-
+    
     K = model.K
     assert model.D == 2
     x = np.linspace(*xlim, nxpts)
@@ -622,7 +623,7 @@ def plot_rslds_elbo(elbos, ax=None):
         fig = plt.figure(figsize=(4, 4))
         ax = fig.gca()
     ax.plot(elbos, 'b-', linewidth=2)
-    ax.set_xlabel("Iteration")
-    ax.set_ylabel("ELBO")
-    ax.grid(True, alpha=0.3)
+        ax.set_xlabel("Iteration")
+        ax.set_ylabel("ELBO")
+        ax.grid(True, alpha=0.3)
     return ax
