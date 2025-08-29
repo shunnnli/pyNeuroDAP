@@ -209,11 +209,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 If you use this package in your research, please cite:
 
 ```bibtex
-@software{neurodap2024,
-  title={NeuroDAP: Neural Data Analysis Package},
+@software{pyNeuroDAP,
+  title={pyNeuroDAP: Neural Data Analysis Package},
   author={Li, Shun},
-  year={2024},
-  url={https://github.com/yourusername/pyNeuroDAP}
+  year={2025},
+  url={https://github.com/shunnnli/pyNeuroDAP}
 }
 ```
 

@@ -1,18 +1,18 @@
 [build-system]
-requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyNeuroDAP"
-dynamic = ["version"]
+version = "1.0.0"
 description = "Neural Data Analysis Package for spike processing, trial management, and modeling"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "Shun Li", email = ""}
+    {name = "Shun Li", email = "shunli@g.harvard.edu"}
 ]
 maintainers = [
-    {name = "Shun Li", email = ""}
+    {name = "Shun Li", email = "shunli@g.harvard.edu"}
 ]
 keywords = ["neuroscience", "neural data", "spike analysis", "electrophysiology", "rSLDS", "machine learning"]
 classifiers = [
@@ -76,14 +76,13 @@ full = [
 ]
 
 [project.urls]
-Homepage = ""
-Documentation = ""
-Repository = ""
-"Bug Tracker" = ""
-"Source Code" = ""
+Homepage = "https://github.com/shunnnli/pyNeuroDAP"
+Documentation = "https://github.com/shunnnli/pyNeuroDAP#readme"
+Repository = "https://github.com/shunnnli/pyNeuroDAP"
+"Bug Tracker" = "https://github.com/shunnnli/pyNeuroDAP/issues"
+"Source Code" = "https://github.com/shunnnli/pyNeuroDAP"
 
-[project.scripts]
-pyNeuroDAP = "pyNeuroDAP.cli:main"
+# CLI script removed - no cli.py module exists
 
 [tool.setuptools]
 packages = ["pyNeuroDAP"]
@@ -94,8 +93,7 @@ pyNeuroDAP = ["*.py", "*.md", "*.txt"]
 [tool.setuptools.exclude-package-data]
 "*" = ["*.pyc", "*.pyo", "*.pyd", "__pycache__", "*.so", "*.dylib", "*.dll"]
 
-[tool.setuptools.dynamic]
-version = {attr = "pyNeuroDAP.__version__"}
+# Version is now static in project section
 
 [tool.black]
 line-length = 88
