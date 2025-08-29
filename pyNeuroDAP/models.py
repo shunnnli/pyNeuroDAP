@@ -264,7 +264,7 @@ def get_inferred_states_old(model, posterior, data, method="laplace_em", z=None)
     return z_inferred, x_inferred
 
 
-def get_inferred_states(model, posterior, data):
+def get_inferred_states(model, posterior, data, method="laplace_em"):
     """
     Returns (z_inferred, x_inferred).
     - If data is a list (or (Y,U) with Y a list), returns two lists.
@@ -273,7 +273,12 @@ def get_inferred_states(model, posterior, data):
     Y, U = _unwrap_Y_U(data)
 
     # Posterior mean continuous states may be list or array depending on how you fit
-    pcs = posterior.mean_continuous_states
+    if method == "laplace_em":
+        pcs = posterior.mean_continuous_states
+    elif method == "bbvi":
+        pcs = posterior.mean
+    else:
+        raise ValueError(f"Unknown method: {method}")
 
     # LIST OF TRIALS
     if isinstance(Y, list):
@@ -300,157 +305,6 @@ def get_inferred_states(model, posterior, data):
             U_2d = U_2d[0]
         z = model.most_likely_states(x, Y_2d, input=U_2d)
         return z, x
-
-
-
-def run_rslds_analysis(data, n_states=4, n_latent_dims=2, method="laplace_em", 
-                         num_iters=100, plot_results=True, random_seed=None,
-                         ):
-    """
-    One-line function to fit rSLDS and analyze results.
-    Works with 2D arrays, 3D arrays, or list-of-trials.
-    """
-    print("=" * 60)
-    print("rSLDS Analysis Pipeline")
-    print("=" * 60)
-    # Fit model
-    model, posterior, elbos = fit_rslds_model(
-        data, n_states, n_latent_dims, method, 
-        num_iters=num_iters, random_seed=random_seed
-    )
-    results = dict(model=model, posterior=posterior, elbos=elbos)
-    # Inferred states (kept as list if trials provided)
-    z_inf, x_inf = get_inferred_states(model, posterior, 
-                                       prepare_rslds_data(data) if not isinstance(data, list) else data,
-                                       method=method)
-    results['z_inferred'] = z_inf
-    results['x_inferred'] = x_inf
-    # Optional plotting
-    if plot_results:
-        try:
-            _ = plot_rslds_summary(model, posterior, data, method=method)
-        except Exception as e:
-            print(f"[warn] plot_rslds_summary failed: {e}")
-    return results
-
-
-def compare_rslds_methods(data, n_states=4, n_latent_dims=2, 
-                         num_iters_lem=100, num_iters_bbvi=1000,
-                         ):
-    """
-    Compare Laplace-EM and BBVI methods for rSLDS fitting.
-    
-    Parameters:
-    -----------
-    data : np.ndarray
-        Input data
-    n_states : int
-        Number of discrete states
-    n_latent_dims : int
-        Number of latent dimensions
-    num_iters_lem : int
-        Number of iterations for Laplace-EM
-    num_iters_bbvi : int
-        Number of iterations for BBVI
-        
-    Returns:
-    --------
-    comparison : dict
-        Dictionary containing comparison results
-    """
-    print("Comparing rSLDS fitting methods...")
-
-    # Prepare data
-    data = prepare_rslds_data(data)
-    
-    # Fit with Laplace-EM
-    print("\n1. Fitting with Laplace-EM...")
-    model_lem, posterior_lem, elbos_lem = fit_rslds_model(
-        data, n_states, n_latent_dims, "laplace_em", num_iters=num_iters_lem
-    )
-    
-    # Fit with BBVI
-    print("\n2. Fitting with BBVI...")
-    model_bbvi, posterior_bbvi, elbos_bbvi = fit_rslds_model(
-        data, n_states, n_latent_dims, "bbvi", num_iters=num_iters_bbvi
-    )
-    
-    # Get inferred states
-    z_lem, x_lem = get_inferred_states(model_lem, posterior_lem, data)
-    z_bbvi, x_bbvi = get_inferred_states(model_bbvi, posterior_bbvi, data)
-    
-    # Create comparison plots
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    
-    # Trajectory comparisons
-    plot_rslds_trajectory(z=z_lem, x=x_lem, ax=axes[0, 0])
-    axes[0, 0].set_title("Laplace-EM: Latent States")
-    
-    plot_rslds_trajectory(z=z_bbvi, x=x_bbvi, ax=axes[0, 1])
-    axes[0, 1].set_title("BBVI: Latent States")
-    
-    # Dynamics comparisons
-    x_lim_lem = abs(x_lem).max(axis=0) + 1
-    plot_rslds_dynamics(model=model_lem, 
-                             xlim=(-x_lim_lem[0], x_lim_lem[0]), 
-                             ylim=(-x_lim_lem[1], x_lim_lem[1]), 
-                             ax=axes[0, 2])
-    axes[0, 2].set_title("Laplace-EM: Dynamics")
-    
-    x_lim_bbvi = abs(x_bbvi).max(axis=0) + 1
-    plot_rslds_dynamics(model=model_bbvi, 
-                             xlim=(-x_lim_bbvi[0], x_lim_bbvi[0]), 
-                             ylim=(-x_lim_bbvi[1], x_lim_bbvi[1]), 
-                             ax=axes[1, 0])
-    axes[1, 0].set_title("BBVI: Dynamics")
-    
-    # ELBO comparisons
-    axes[1, 1].plot(elbos_lem, 'b-', label='Laplace-EM', linewidth=2)
-    axes[1, 1].plot(elbos_bbvi, 'r-', label='BBVI', linewidth=2)
-    axes[1, 1].set_xlabel("Iteration")
-    axes[1, 1].set_ylabel("ELBO")
-    axes[1, 1].set_title("Convergence Comparison")
-    axes[1, 1].legend()
-    axes[1, 1].grid(True, alpha=0.3)
-    
-    # State usage comparison
-    state_counts_lem = np.bincount(z_lem, minlength=n_states)
-    state_counts_bbvi = np.bincount(z_bbvi, minlength=n_states)
-    
-    x_pos = np.arange(n_states)
-    width = 0.35
-    
-    axes[1, 2].bar(x_pos - width/2, state_counts_lem, width, label='Laplace-EM', alpha=0.8)
-    axes[1, 2].bar(x_pos + width/2, state_counts_bbvi, width, label='BBVI', alpha=0.8)
-    axes[1, 2].set_xlabel("State")
-    axes[1, 2].set_ylabel("Count")
-    axes[1, 2].set_title("State Usage Comparison")
-    axes[1, 2].set_xticks(x_pos)
-    axes[1, 2].set_xticklabels([f"State {i}" for i in range(n_states)])
-    axes[1, 2].legend()
-    axes[1, 2].grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    
-    comparison = {
-        'laplace_em': {
-            'model': model_lem,
-            'posterior': posterior_lem,
-            'elbos': elbos_lem,
-            'z_inferred': z_lem,
-            'x_inferred': x_lem
-        },
-        'bbvi': {
-            'model': model_bbvi,
-            'posterior': posterior_bbvi,
-            'elbos': elbos_bbvi,
-            'z_inferred': z_bbvi,
-            'x_inferred': x_bbvi
-        },
-        'comparison_plot': fig
-    }
-    
-    return comparison
 
 
 # -----------------------------------------------------------------------------
@@ -544,47 +398,16 @@ def load_rslds_model(save_path):
 # Plotting functions
 # -------------------------------------------------
 
+def _mode_per_time(Z_stack):
+    """Z_stack: (S, T) ints → per-time majority label (break ties by smallest label)."""
+    S, T = Z_stack.shape
+    out = np.zeros(T, dtype=int)
+    for t in range(T):
+        counts = np.bincount(Z_stack[:, t].astype(int))
+        out[t] = np.argmax(counts)
+    return out
 
-def plot_rslds_trajectory(model=None, posterior=None, data=None,
-                          trial_idx=0, x=None, z=None, ax=None,
-                          cmap='viridis', lw=2, alpha=0.95):
-    """
-    Plot a single-trial latent trajectory in 2D, colored by discrete state.
-    Works with:
-      - data = Y or (Y, U) where Y is list[(T_i,N)] or array (T,N)/(N,T)
-      - or with precomputed x, z.
-    """
-    from matplotlib.collections import LineCollection
-    # If x/z not provided, compute from model/posterior and the *matching* Y_i, U_i
-    if x is None or z is None:
-        assert (model is not None) and (posterior is not None) and (data is not None)
-        Y, U = _unwrap_Y_U(data)
-        pcs = posterior.mean_continuous_states
-        x = pcs[trial_idx] if isinstance(pcs, (list, tuple)) else pcs
-        if x.shape[1] > 2:
-            x = x[:, :2]  # project first 2 dims for plotting
-        Y_i = Y[trial_idx] if isinstance(Y, list) else (Y if Y.shape[0] >= Y.shape[1] else Y.T)
-        U_i = U[trial_idx] if (U is not None and isinstance(U, list)) else U
-        z = model.most_likely_states(x, Y_i, input=U_i)  # per-trial Viterbi. :contentReference[oaicite:3]{index=3}
-
-    x = np.asarray(x); z = np.asarray(z)
-    assert x.ndim == 2 and x.shape[1] == 2, f"x must be (T,2); got {x.shape}"
-    assert z.shape[0] == x.shape[0], "z and x must share T"
-
-    # Color each segment (x_t -> x_{t+1}) by z_t; avoids jumps across gaps
-    seg = np.stack([x[:-1], x[1:]], axis=1)       # (T-1, 2, 2)
-    lc = LineCollection(seg, cmap=cmap, linewidths=lw, alpha=alpha)
-    lc.set_array(z[:-1].astype(float))
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(5, 5))
-    ax.add_collection(lc)
-    ax.scatter(x[0, 0], x[0, 1], c="red", s=50, marker="x", zorder=5)
-    ax.autoscale()
-    ax.set_xlabel("x1"); ax.set_ylabel("x2")
-    return ax
-
-
-def plot_rslds_trajectory_old(model=None, posterior=None, data=None, 
+def plot_rslds_trajectory(model=None, posterior=None, data=None, 
                           method="laplace_em", zscore=True, trial_types=None,
                             z=None, x=None, ax=None, 
                             line_style="-", line_width=2, color=None, label=None,
@@ -595,20 +418,52 @@ def plot_rslds_trajectory_old(model=None, posterior=None, data=None,
     Plot a single-trial latent trajectory (2-D) colored by discrete state.
     If `data`/`x`/`z` are lists, `trial_idx` chooses which trial to plot.
     """
-    # Prepare data
-    if data is not None:
-        data, inputs = prepare_rslds_data(data, zscore=zscore, trial_types=trial_types)
-    # Infer states if needed
-    if model is not None and posterior is not None and (x is None or z is None):
-        z, x = get_inferred_states(model, posterior, data, method=method)
-    # Select the requested trial
-    if isinstance(x, list):
-        x = x[trial_idx]
-    if isinstance(z, list):
-        z = z[trial_idx]
-    # Convert to arrays
+    Y, U = _unwrap_Y_U(data)
+
+    # pick the trial's x (posterior means)
+    if method == "laplace_em":
+        pcs = posterior.mean_continuous_states
+    elif method == "bbvi":
+        pcs = posterior.mean
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+    # --- Average across trials when trial_idx is None ---
+    if trial_idx is None and isinstance(Y, list):
+        # collect x_i, z_i per trial
+        x_list, z_list, T_list = [], [], []
+        for i in range(len(Y)):
+            x_i = pcs[i] if isinstance(pcs, (list, tuple)) else pcs
+            if x_i.shape[1] > 2:
+                x_i = x_i[:, :2]
+            Y_i = Y[i]
+            U_i = U[i] if (U is not None and isinstance(U, list)) else U
+            z_i = model.most_likely_states(x_i, Y_i, input=U_i)
+            x_list.append(x_i)
+            z_list.append(np.asarray(z_i))
+            T_list.append(x_i.shape[0])
+        T = int(min(T_list))
+        x = np.mean([xi[:T] for xi in x_list], axis=0)           # (T,2)
+        Z_stack = np.stack([zi[:T] for zi in z_list], axis=0)    # (S,T)
+        z = _mode_per_time(Z_stack)                              # (T,)
+    else:
+        # --- Single trial path (your original logic) ---
+        x = pcs[trial_idx] if isinstance(pcs, (list, tuple)) else pcs
+        if x.shape[1] > 2:
+            x = x[:, :2]
+        if isinstance(Y, list):
+            Y_i = Y[trial_idx]
+        else:
+            Y_i = Y if Y.shape[0] >= Y.shape[1] else Y.T
+        U_i = U[trial_idx] if (U is not None and isinstance(U, list)) else U
+        z = model.most_likely_states(x, Y_i, input=U_i)
+
+    # most-likely discrete states for that trial
     x = np.asarray(x)
     z = np.asarray(z)
+    assert x.ndim == 2 and x.shape[1] == 2, f"x must be (T,2); got {x.shape}"
+    assert z.shape[0] == x.shape[0], "z and x must share T"
+
     # Color transitions
     zcps = np.concatenate(([0], np.where(np.diff(z))[0] + 1, [z.size]))
     if ax is None:
@@ -636,28 +491,7 @@ def plot_rslds_trajectory_old(model=None, posterior=None, data=None,
     return ax
 
 
-def plot_rslds_observations(model, posterior, data, trial_idx=0, neuron_idx=0, ax=None):
-    """
-    Simple raster/trace overlay with z coloring for a chosen neuron & trial.
-    """
-    Y, U = _unwrap_Y_U(data)
-    Y_i = Y[trial_idx] if isinstance(Y, list) else (Y if Y.shape[0] >= Y.shape[1] else Y.T)
-    pcs = posterior.mean_continuous_states
-    x_i = pcs[trial_idx] if isinstance(pcs, (list, tuple)) else pcs
-    z_i = model.most_likely_states(x_i, Y_i, input=(U[trial_idx] if isinstance(U, list) else U))
-    y_i = Y_i[:, neuron_idx]
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(6, 2))
-    ax.plot(y_i, lw=1.0, color="k", alpha=0.6)
-    # overlay state as colored background (fast & simple)
-    for t in range(len(z_i)):
-        ax.axvspan(t-0.5, t+0.5, color=plt.cm.tab10(z_i[t] % 10), alpha=0.08)
-    ax.set_title(f"Trial {trial_idx}, neuron {neuron_idx}")
-    ax.set_xlabel("time (bins)"); ax.set_ylabel("rate")
-    return ax
-
-
-def plot_rslds_observations_old(model=None, posterior=None, data=None, method="laplace_em",
+def plot_rslds_observations(model=None, posterior=None, data=None, method="laplace_em",
                             z=None, y=None, n_neurons=3, 
                             ax=None, line_style="-", line_width=2, color=None, label=None,
                             key_time=None, time_range=None, bin_size=None,
@@ -667,43 +501,88 @@ def plot_rslds_observations_old(model=None, posterior=None, data=None, method="l
     Plot observed neural activity for a single trial colored by inferred states.
     If `data`/`y`/`z` are lists, `trial_idx` chooses which trial to plot.
     """
-    # Build y (T, n_neurons)
-    if y is None:
-        if data is None:
-            raise ValueError("data or y is required")
-        data_prep = prepare_rslds_data(data) if not isinstance(data, list) else data
-        if isinstance(data_prep, list):
-            y = data_prep[trial_idx][:, :n_neurons]
+    Y, U = _unwrap_Y_U(data)
+
+    # Choose posterior means container
+    if method == "laplace_em":
+        pcs = posterior.mean_continuous_states
+    elif method == "bbvi":
+        pcs = posterior.mean
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+    if trial_idx is None and isinstance(Y, list):
+        # compute per-trial z_i; build averaged Y and majority z
+        T_list = [y_i.shape[0] for y_i in Y]
+        T = int(min(T_list))
+        # average observations
+        Y_avg = np.mean([Y[i][:T] for i in range(len(Y))], axis=0)   # (T,N)
+        # majority z over trials (using trial-wise most-likely states)
+        Z_stack = []
+        for i in range(len(Y)):
+            x_i = pcs[i] if isinstance(pcs, (list, tuple)) else pcs
+            U_i = U[i] if (U is not None and isinstance(U, list)) else U
+            z_i = model.most_likely_states(x_i, Y[i], input=U_i)
+            Z_stack.append(np.asarray(z_i)[:T])
+        z = _mode_per_time(np.stack(Z_stack, axis=0))
+        Y_i = Y_avg
+    else:
+        # single trial path (your original logic)
+        if isinstance(Y, list):
+            Y_i = Y[trial_idx]
         else:
-            y = data_prep.T[:, :n_neurons]
-    # Align z with the chosen trial
-    if model is not None and posterior is not None and z is None:
-        z, _x = get_inferred_states(model, posterior, data if y is None else data_prep, method=method)
-    if isinstance(z, list):
-        z = z[trial_idx]
-    z = np.asarray(z) if z is not None else np.zeros(y.shape[0], dtype=int)
+            Y_i = Y if Y.shape[0] >= Y.shape[1] else Y.T
+        U_i = U[trial_idx] if (U is not None and isinstance(U, list)) else U
+        x_i = pcs[trial_idx] if isinstance(pcs, (list, tuple)) else pcs
+        z = model.most_likely_states(x_i, Y_i, input=U_i)
+    
+    
     # Compute change points
+    z = np.asarray(z)
     zcps = np.concatenate(([0], np.where(np.diff(z))[0] + 1, [z.size]))
     if ax is None:
         fig = plt.figure(figsize=(4, 4))
         ax = fig.gca()
     if color is None:
         color = 'blue'
-    T, N = y.shape
+    T, N = Y_i.shape
     t = np.arange(T)
     for n in range(N):
         for start, stop in zip(zcps[:-1], zcps[1:]):
             alpha = (start + 1) / z.size
             plot_color = color if isinstance(color, str) else color[z[start] % len(color)]
-            ax.plot(t[start:stop + 1], y[start:stop + 1, n],
+            ax.plot(t[start:stop + 1], Y_i[start:stop + 1, n],
                     lw=line_width, ls=line_style, color=plot_color, alpha=alpha, label=label)
     return ax
 
 
 
-def plot_rslds_dynamics(model=None,
+def get_plot_lims(posterior, method="laplace_em"):
+    if method == "laplace_em":
+        pcs = posterior.mean_continuous_states
+    elif method == "bbvi":
+        pcs = posterior.mean
+    else:
+        raise ValueError(f"Unknown method: {method}")
+    # collect all latents
+    X = np.vstack(pcs) if isinstance(pcs, (list, tuple)) else pcs
+    X2 = X[:, :2] if X.shape[1] > 2 else X
+
+    # tight limits with a little margin
+    pad = 0.5
+    xlim = (X2[:,0].min() - pad, X2[:,0].max() + pad)
+    ylim = (X2[:,1].min() - pad, X2[:,1].max() + pad)
+    return xlim, ylim
+
+
+
+def plot_rslds_dynamics(model=None, posterior=None, method="laplace_em",
                         xlim=(-4, 4), ylim=(-3, 3), nxpts=20, nypts=20,
                         alpha=0.8, ax=None, figsize=(3, 3), colormap=None):
+
+    # Get the limits for the plot
+    if posterior is not None:
+        xlim, ylim = get_plot_lims(posterior, method)
 
     if colormap is None:
         colormap = plt.get_cmap('Paired')
@@ -748,75 +627,3 @@ def plot_rslds_elbo(elbos, ax=None):
     ax.set_ylabel("ELBO")
     ax.grid(True, alpha=0.3)
     return ax
-
-
-def plot_rslds_summary(model, posterior, data, method="laplace_em",
-                plot_trajectories=True, plot_dynamics=True, plot_observations=True, plot_elbo=True,
-                n_neurons=3, trial_idx=0):
-    """
-    Comprehensive analysis of rSLDS results with automatic plotting.
-    Supports 2D arrays, 3D arrays, or list-of-trials. When trials are provided,
-    `trial_idx` chooses which trial to visualize.
-    """
-    # Prepare data in the new convention
-    data_prep = prepare_rslds_data(data) if not isinstance(data, list) else data
-    # Inference
-    z_inf, x_inf = get_inferred_states(model, posterior, data_prep, method=method)
-    # Select trial if needed for plotting
-    if isinstance(z_inf, list):
-        z_plot = z_inf[trial_idx]
-        x_plot = x_inf[trial_idx]
-        y_plot = data_prep[trial_idx][:, :n_neurons]
-        data_shape = (len(data_prep),) + data_prep[0].shape
-    else:
-        z_plot = z_inf
-        x_plot = x_inf
-        y_plot = (data_prep.T)[:, :n_neurons]
-        data_shape = getattr(data, "shape", ("unknown",))
-    results = {
-        'model': model,
-        'posterior': posterior,
-        'z_inferred': z_inf,
-        'x_inferred': x_inf,
-        'data_shape': data_shape,
-        'n_states': model.K,
-        'n_latent_dims': model.D,
-        'method': method
-    }
-    # Create figure(s)
-    n_plots = 0
-    if plot_trajectories or plot_dynamics: n_plots = 1
-    elif plot_observations: n_plots += 1
-    if plot_elbo: n_plots += 1
-    fig, axes = plt.subplots(1, n_plots, figsize=(20, 6))
-    # Dynamics
-    if plot_dynamics:
-        ax = axes[0]
-        x_lim = abs(x_plot).max(axis=0) + 1
-        plot_rslds_dynamics(model, xlim=(-x_lim[0], x_lim[0]), ylim=(-x_lim[1], x_lim[1]), ax=ax)
-        ax.set_title(f"Inferred System Dynamics ({method})")
-        results['dynamics_plot'] = fig
-    # Trajectory
-    if plot_trajectories:
-        ax = axes[0]
-        plot_rslds_trajectory(z=z_plot, x=x_plot, ax=ax)
-        ax.set_title(f"Inferred Latent States ({method})")
-        ax.set_xlabel("Latent Dimension 1")
-        ax.set_ylabel("Latent Dimension 2")
-    # Observations
-    if plot_observations:
-        # Place in next subplot slot if dynamics/trajectory used; else first
-        ax = axes[1 if (plot_trajectories or plot_dynamics) else 0]
-        plot_rslds_observations(z=z_plot, y=y_plot, ax=ax)
-        ax.set_title(f"Observations Colored by State ({method})")
-        ax.set_xlabel("Time")
-        ax.set_ylabel("Neural Activity")
-        results['trajectory_plot'] = fig
-    # ELBO
-    if plot_elbo and hasattr(posterior, 'elbos'):
-        ax = axes[-1]
-        plot_rslds_elbo(posterior.elbos, ax=ax)
-        ax.set_title(f"Convergence ({method})")
-        results['elbo_plot'] = fig
-    plt.tight_layout()
-    return results

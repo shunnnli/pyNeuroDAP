@@ -35,12 +35,10 @@ from .models import (
     plot_rslds_observations,
     plot_rslds_dynamics,
     plot_rslds_elbo,
-    plot_rslds_summary,
-    run_rslds_analysis,
-    compare_rslds_methods,
     save_rslds_model,
     load_rslds_model,
     prepare_rslds_data,
+    get_plot_lims,
 )
 
 from .trials import (
@@ -107,12 +105,10 @@ __all__ = [
     'plot_rslds_observations',
     'plot_rslds_dynamics',
     'plot_rslds_elbo',
-    'plot_rslds_summary',
-    'run_rslds_analysis',
-    'compare_rslds_methods',
     'save_rslds_model',
     'load_rslds_model',
     'prepare_rslds_data',
+    'get_plot_lims',
     
     # Trial management
     'get_trial_table',
