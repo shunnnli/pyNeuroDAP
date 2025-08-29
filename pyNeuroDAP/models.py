@@ -627,7 +627,7 @@ def plot_rslds_elbo(elbos, ax=None):
     if ax is None:
         fig = plt.figure(figsize=(4, 4))
         ax = fig.gca()
-    ax.plot(elbos, 'b-', linewidth=2)
+        ax.plot(elbos, 'b-', linewidth=2)
         ax.set_xlabel("Iteration")
         ax.set_ylabel("ELBO")
         ax.grid(True, alpha=0.3)
