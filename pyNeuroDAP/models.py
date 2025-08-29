@@ -383,7 +383,7 @@ def save_rslds_model(model, posterior, data, bundle_name="rslds_run.joblib", *, 
 
     # Create save path
     today = datetime.now().strftime("%Y%m%d")
-    save_path = f"results-{today}/{bundle_name}"
+    save_path = f"Results/rslds_models/rslds-{today}/{bundle_name}"
     joblib.dump(bundle, save_path, compress=compress)
     return save_path
 
