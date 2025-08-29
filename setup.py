@@ -13,13 +13,13 @@ def read_requirements():
 
 setup(
     name="pyNeuroDAP",
-    version="0.1.0",
+    version="1.0.0",
     author="Shun Li",
-    author_email="",  # Add your email if desired
+    author_email="shunli@g.harvard.edu",  # Add your email if desired
     description="Neural Data Analysis Package for spike processing, trial management, and modeling",
     long_description=read_readme(),
     long_description_content_type="text/markdown",
-    url="",  # Add your repository URL if desired
+    url="https://github.com/shunnnli/pyNeuroDAP",  # Add your repository URL if desired
     packages=find_packages(),
     classifiers=[
         "Development Status :: 3 - Alpha",
