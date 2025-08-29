@@ -80,8 +80,37 @@ def convert_spikes_from_mat(params, user='shun',
         return spikes
 
 
+def convert_behaviors_from_mat(session_mat, user='shun'):
+    """
+    Get the behavior data from a MATLAB file.
+    """
+    if user == 'shun':
+        pass
+    
+    if user == 'shijia':
+        # TODO: Hard coded for now, need to change later
+        # Extract behavior data from keys
+        
+        event_times = {}
+        # behavior_keys = ['cueIdx','rewardTrialsNum','omissionTrialsNum','missTrialsNum']
+        lick_keys = ['lick','lickIdx_rewardTrial','lickIdx_omissionTrial']
 
+        cueIdx = session_mat['cueIdx'].flatten()
+        reward_trials_num = session_mat['rewardTrialsNum'].flatten()
+        omission_trials_num = session_mat['omissionTrialsNum'].flatten()
+        miss_trials_num = session_mat['missTrialsNum'].flatten()
 
+        event_times['trial_start_times'] = {
+            'reward_control': cueIdx[reward_trials_num-1].flatten(),
+            'omission_control': cueIdx[omission_trials_num-1].flatten(),
+            'miss_control': cueIdx[miss_trials_num-1].flatten()
+        }
+
+        # TODO: subset lick data to different number of lick
+        for key in lick_keys:
+            event_times[key] = session_mat[key][0]
+
+        return event_times
 
 
 

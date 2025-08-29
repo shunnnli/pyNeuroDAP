@@ -1,0 +1,616 @@
+--- models.py
++++ models.py (patched)
+@@ -17,33 +17,48 @@
+ # Main Wrapper Functions for rSLDS Analysis
+ # =============================================================================
+ 
+-def prepare_rslds_data(data, concat_trials=True):
++
++def prepare_rslds_data(data, concat_trials=False):
+     """
+     Prepare data for rSLDS analysis.
+-    """
++
++    If `data` is 2D (n_neurons, n_timebins), it is returned unchanged.
++    If `data` is 3D (n_neurons, n_trials, n_timebins) and `concat_trials` is False
++    (default), return a **list** of per-trial arrays with shape (T, N) suitable for
++    the SSM API, where T = n_timebins and N = n_neurons. If `concat_trials` is True,
++    keep the old behavior and concatenate trials along time to return a 2D array
++    (n_neurons, n_trials * n_timebins).
++    """
++    # 2D: keep as-is
++    if data.ndim == 2:
++        print(f"Input data (2D): {data.shape[0]} neurons, {data.shape[1]} time points")
++        return data
++
++    # 3D: (n_neurons, n_trials, n_timebins)
+     if data.ndim == 3:
+         data = ndap.remove_nan_trials(data)
++        n_neurons, n_trials, n_timebins = data.shape
+         if concat_trials:
+-            # (n_neurons, n_trials, n_timebins) -> concatenate trials for each neuron
+-            n_neurons, n_trials, n_timebins = data.shape
+-            data_flat = data.reshape(n_neurons, -1)  # shape: (n_neurons, n_trials*n_timebins)
+-            print(f"Input data: {n_neurons} neurons, {n_trials} trials, {n_timebins} time bins")
+-            print(f"Concatenated over trials: {n_neurons} neurons, {n_trials*n_timebins} time points")
++            # Old behavior: concatenate all trials along time for each neuron
++            data_flat = data.reshape(n_neurons, -1)
++            print(f"Input data (3D): {n_neurons} neurons, {n_trials} trials, {n_timebins} time bins")
++            print(f"Concatenated over trials -> (n_neurons, n_timepoints) = {data_flat.shape}")
++            return data_flat
+         else:
+-            # (n_neurons, n_trials, n_timebins) -> average over trials for each neuron
+-            n_neurons, n_trials, n_timebins = data.shape
+-            data_flat = np.mean(data, axis=1)  # shape: (n_neurons, n_timebins)
+-            print(f"Input data: {n_neurons} neurons, {n_trials} trials, {n_timebins} time bins")
+-            print(f"Averaged over trials: {n_neurons} neurons, {n_timebins} time points")
+-    else:
+-        data_flat = data
+-        print(f"Input data: {data_flat.shape[0]} neurons, {data_flat.shape[1]} time points")
+-    
+-    return data_flat
++            # New default: list-of-trials formatted for SSM (T, N) per trial
++            Y = [data[:, i, :].T.copy() for i in range(n_trials)]
++            print(f"Input data (3D): {n_neurons} neurons, {n_trials} trials, {n_timebins} time bins")
++            print(f"Returning list of {len(Y)} trials with shapes {[y.shape for y in Y[:3]]}{'...' if n_trials>3 else ''}")
++            return Y
++
++    # Fallback: return as-is
++    print("Warning: data has unexpected ndim; returning as-is.")
++    return data
++
+ 
+ 
+ def fit_rslds_model(data, n_states=4, n_latent_dims=2, method="laplace_em", 
+-                    concat_trials=True,
++                    concat_trials=False,
+                     variational_posterior="structured_meanfield", num_iters=100, 
+                     dynamics="diagonal_gaussian", emissions="gaussian_orthog",
+                     alpha=0.0, random_seed=None):
+@@ -52,16 +67,18 @@
+     
+     Parameters:
+     -----------
+-    data : np.ndarray
+-        Input data of shape (n_neurons, n_trials, n_timebins) or (n_neurons, n_timebins)
++    data : array-like
++        Either (n_neurons, n_timebins), (n_neurons, n_trials, n_timebins),
++        or a **list** of trial arrays each with shape (T_i, N).
+     n_states : int
+         Number of discrete states (default: 4)
+     n_latent_dims : int
+         Number of latent dimensions (default: 2)
+     method : str
+-        Fitting method: "laplace_em" (recommended) or "bbvi" (default: "laplace_em")
++        Fitting method: "laplace_em" (recommended) or "bbvi"
+     concat_trials : bool
+-        Whether to concatenate trials (default: True)
++        If `data` is 3D, choose whether to concatenate trials (legacy behavior).
++        Default False (use list-of-trials).
+     variational_posterior : str
+         Posterior approximation: "structured_meanfield" (for laplace_em) or "meanfield" (for bbvi)
+     num_iters : int
+@@ -92,18 +109,25 @@
+     if random_seed is not None:
+         npr.seed(random_seed)
+     
+-    # Handle different input shapes
+-    if data.ndim == 3:
+-        Warning("Input data is 3D, should call prepare_rslds_data first")
+-        data_flat = prepare_rslds_data(data, concat_trials)  # shape: (n_neurons, n_timebins)
++    # Prepare data for SSM
++    if isinstance(data, list):
++        data_ssm = data
++        N = data_ssm[0].shape[1]
+     else:
+-        data_flat = data  # shape: (n_neurons, n_timebins)
+-    
+-    # Transpose data to match SSM format (time x features)
+-    data_ssm = data_flat.T  # Shape: (n_timepoints, n_neurons)
++        if getattr(data, "ndim", None) == 3:
++            data_prepared = prepare_rslds_data(data, concat_trials=concat_trials)
++        else:
++            data_prepared = data
++        if isinstance(data_prepared, list):
++            data_ssm = data_prepared
++            N = data_ssm[0].shape[1]
++        else:
++            # 2D array given as (n_neurons, n_timebins): transpose to (T, N)
++            data_ssm = data_prepared.T
++            N = data_ssm.shape[1]
+     
+     # Create rSLDS model
+-    model = ssm.SLDS(data_ssm.shape[1], n_states, n_latent_dims,
++    model = ssm.SLDS(N, n_states, n_latent_dims,
+                      transitions="recurrent_only",
+                      dynamics=dynamics,
+                      emissions=emissions,
+@@ -131,6 +155,7 @@
+     return model, posterior, elbos
+ 
+ 
++
+ def get_inferred_states(model, posterior, data, method="laplace_em", z=None):
+     """
+     Extract inferred discrete and continuous states from fitted model.
+@@ -141,19 +166,18 @@
+         Fitted rSLDS model
+     posterior : object
+         Posterior object from fitting
+-    data : np.ndarray
+-        Original input data
++    data : array-like
++        Original input data (2D array or list of (T, N) arrays)
+     method : str
+         Method to use for inference: "laplace_em" or "bbvi"
+-    z : np.ndarray, optional
+-        True discrete states (for permutation and verification of rSLDS notebook)
+-        
++    z : np.ndarray or list, optional
++        True discrete states for permutation (rarely used)
++    
+     Returns:
+     --------
+-    z_inferred : np.ndarray
+-        Inferred discrete states
+-    x_inferred : np.ndarray
+-        Inferred continuous states
++    z_inferred, x_inferred : array-like
++        If the input was a list of trials, both are lists (one per trial).
++        Otherwise they are 2D arrays.
+     """
+     # Import SSM only when needed
+     try:
+@@ -165,104 +189,86 @@
+             from ssm.util import find_permutation
+         except ImportError:
+             raise ImportError("SSM library not found. Please install it with: pip install -e . from the ssm directory")
+-
+-    # Handle different input shapes
+-    if data.ndim == 3:
+-        raise ValueError("Input data is 3D, should call prepare_rslds_data first")
+-    
+-    data_ssm = data.T  # Shape: (n_timepoints, n_neurons)
+-    
++    
++    # Prepare data in SSM orientation
++    if isinstance(data, list):
++        data_ssm = data
++    else:
++        if getattr(data, "ndim", None) == 3:
++            raise ValueError("Input data is 3D; call prepare_rslds_data first to create a list of trials.")
++        data_ssm = data.T  # (T, N)
++    
++    # Extract posterior mean of continuous states
+     if method == "laplace_em":
+-        x_inferred = posterior.mean_continuous_states[0]  # Shape: (n_timepoints, n_latent_dims)
++        x_post = getattr(posterior, "mean_continuous_states", None)
+     elif method == "bbvi":
+-        x_inferred = posterior.mean[0]  # Shape: (n_timepoints, n_latent_dims)
++        x_post = getattr(posterior, "mean", None)
+     else:
+         raise ValueError(f"Unknown method: {method}")
+-
+-    # if timepoints are not the same as the data, pad the data with zeros
+-    if x_inferred.shape[0] != data_ssm.shape[0]:
+-        if x_inferred.shape[0] < data_ssm.shape[0]:
+-            Warning("x_inferred has less timepoints than data, padding x_inferred with zeros")
+-            x_inferred = np.pad(x_inferred, ((0, data_ssm.shape[0] - x_inferred.shape[0]), (0, 0)), 'constant')
++    
++    # Normalize to list or array matching data_ssm
++    if isinstance(data_ssm, list):
++        if not isinstance(x_post, (list, tuple)):
++            # Some versions store as attribute 'means_list' etc.; fall back to a list with single element
++            x_inferred = list(x_post) if isinstance(x_post, (list, tuple)) else [x_post]
+         else:
+-            Warning("x_inferred has more timepoints than data, padding data with zeros")
+-            data_ssm = np.pad(data_ssm, ((0, x_inferred.shape[0] - data_ssm.shape[0]), (0, 0)), 'constant')
+-    
+-    # Get most likely discrete states
+-    if z is not None:
+-        model.permute(find_permutation(z, model.most_likely_states(x_inferred, data_ssm)))
+-    z_inferred = model.most_likely_states(x_inferred, data_ssm)
++            x_inferred = list(x_post)
++        # Compute z per trial
++        z_inferred = [model.most_likely_states(x_i, y_i) for x_i, y_i in zip(x_inferred, data_ssm)]
++    else:
++        # Single long sequence
++        if isinstance(x_post, (list, tuple)):
++            x_inferred = x_post[0]
++        else:
++            x_inferred = x_post
++        # Pad shapes if needed (rare)
++        if x_inferred.shape[0] != data_ssm.shape[0]:
++            if x_inferred.shape[0] < data_ssm.shape[0]:
++                x_inferred = np.pad(x_inferred, ((0, data_ssm.shape[0] - x_inferred.shape[0]), (0, 0)), 'constant')
++            else:
++                data_ssm = np.pad(data_ssm, ((0, x_inferred.shape[0] - data_ssm.shape[0]), (0, 0)), 'constant')
++        if z is not None:
++            model.permute(find_permutation(z, model.most_likely_states(x_inferred, data_ssm)))
++        z_inferred = model.most_likely_states(x_inferred, data_ssm)
+     
+     return z_inferred, x_inferred
++
+ 
+ 
+ def run_rslds_analysis(data, n_states=4, n_latent_dims=2, method="laplace_em", 
+                          num_iters=100, plot_results=True, random_seed=None,
+-                         concat_trials=True):
++                         concat_trials=False):
+     """
+     One-line function to fit rSLDS and analyze results.
+-    
+-    Parameters:
+-    -----------
+-    data : np.ndarray
+-        Input data of shape (n_neurons, n_trials, n_timebins) or (n_neurons, n_timebins)
+-    n_states : int
+-        Number of discrete states (default: 4)
+-    n_latent_dims : int
+-        Number of latent dimensions (default: 2)
+-    method : str
+-        Fitting method: "laplace_em" (recommended) or "bbvi" (default: "laplace_em")
+-    num_iters : int
+-        Number of fitting iterations (default: 100)
+-    plot_results : bool
+-        Whether to automatically plot results (default: True)
+-    random_seed : int, optional
+-        Random seed for reproducibility
+-        
+-    Returns:
+-    --------
+-    results : dict
+-        Dictionary containing all analysis results
++    Works with 2D arrays, 3D arrays, or list-of-trials.
+     """
+     print("=" * 60)
+     print("rSLDS Analysis Pipeline")
+     print("=" * 60)
+-
+     # Fit model
+     model, posterior, elbos = fit_rslds_model(
+         data, n_states, n_latent_dims, method, 
+-        num_iters=num_iters, random_seed=random_seed, concat_trials=concat_trials
++        concat_trials=concat_trials, num_iters=num_iters, random_seed=random_seed
+     )
+-    
+-    # Analyze results
++    results = dict(model=model, posterior=posterior, elbos=elbos)
++    # Inferred states (kept as list if trials provided)
++    z_inf, x_inf = get_inferred_states(model, posterior, 
++                                       prepare_rslds_data(data, concat_trials=concat_trials) if not isinstance(data, list) else data,
++                                       method=method)
++    results['z_inferred'] = z_inf
++    results['x_inferred'] = x_inf
++    # Optional plotting
+     if plot_results:
+-        results = plot_rslds_summary(model, posterior, data, method=method)
+-    else:
+-        results = {
+-            'model': model,
+-            'posterior': posterior,
+-            'elbos': elbos,
+-            'z_inferred': None,
+-            'x_inferred': None
+-        }
+-        # Still get inferred states for analysis
+-        results['z_inferred'], results['x_inferred'] = get_inferred_states(
+-            model, posterior, data
+-        )
+-    
+-    print("=" * 60)
+-    print("Analysis Complete!")
+-    print(f"Model: {n_states} states, {n_latent_dims} latent dimensions")
+-    print(f"Method: {method}")
+-    print(f"Data shape: {data.shape}")
+-    print("=" * 60)
+-    
++        try:
++            _ = plot_rslds_summary(model, posterior, data, method=method, concat_trials=concat_trials)
++        except Exception as e:
++            print(f"[warn] plot_rslds_summary failed: {e}")
+     return results
+ 
+ 
+ def compare_rslds_methods(data, n_states=4, n_latent_dims=2, 
+                          num_iters_lem=100, num_iters_bbvi=1000,
+-                         concat_trials=True):
++                         concat_trials=False):
+     """
+     Compare Laplace-EM and BBVI methods for rSLDS fitting.
+     
+@@ -613,59 +619,57 @@
+         return []
+ 
+ 
++
+ def plot_rslds_trajectory(model=None, posterior=None, data=None, method="laplace_em",
+                             z=None, x=None, ax=None, 
+                             line_style="-", line_width=2, color=None, label=None,
+                             key_time=None, time_range=None, bin_size=None,
+                             marker='x', marker_size=80, marker_color='red',
+-                            concat_trials=False):
+-
++                            concat_trials=False, trial_idx=0):
++    """
++    Plot a single-trial latent trajectory (2-D) colored by discrete state.
++    If `data`/`x`/`z` are lists, `trial_idx` chooses which trial to plot.
++    """
++    # Prepare data
+     if data is not None:
+         data = prepare_rslds_data(data, concat_trials=concat_trials)
+-
+-
+-    if model is not None:
++    # Infer states if needed
++    if model is not None and posterior is not None and (x is None or z is None):
+         z, x = get_inferred_states(model, posterior, data, method=method)
+-    else:
+-        z = np.asarray(z)
+-        x = np.asarray(x)
+-
++    # Select the requested trial
++    if isinstance(x, list):
++        x = x[trial_idx]
++    if isinstance(z, list):
++        z = z[trial_idx]
++    # Convert to arrays
++    x = np.asarray(x)
++    z = np.asarray(z)
++    # Color transitions
+     zcps = np.concatenate(([0], np.where(np.diff(z))[0] + 1, [z.size]))
+-
+     if ax is None:
+         fig = plt.figure(figsize=(4, 4))
+         ax = fig.gca()
+-    if color is None: color = 'blue'
+-
++    if color is None:
++        color = 'blue'
+     for start, stop in zip(zcps[:-1], zcps[1:]):
+-        alpha = (start + 1) / z.size # goes from ~0 to 1
+-        if isinstance(color, str): plot_color = color
+-        else: plot_color = color[z[start] % len(color)]
+-        ax.plot(
+-            x[start:stop + 1, 0],
+-            x[start:stop + 1, 1],
+-            lw=line_width, ls=line_style,
+-            color=plot_color, alpha=alpha, label=label
+-        )
+-    # Add marker(s) for key_time if provided
++        alpha = (start + 1) / z.size
++        plot_color = color if isinstance(color, str) else color[z[start] % len(color)]
++        ax.plot(x[start:stop + 1, 0], x[start:stop + 1, 1],
++                lw=line_width, ls=line_style, color=plot_color, alpha=alpha, label=label)
++    # Optional markers
+     if key_time is not None:
+         if not isinstance(key_time, (list, tuple, np.ndarray)):
+             key_time = [key_time]
+         for kt in key_time:
+-            # Determine index for key_time
+             if time_range is not None and bin_size is not None:
+-                # Map key_time (in seconds) to index
+                 rel_kt = kt - time_range[0]
+                 idx = int(round(rel_kt / bin_size))
+             else:
+-                # Assume key_time is an integer index
+                 idx = int(round(kt))
+             idx = max(0, min(idx, x.shape[0] - 1))
+-            ax.scatter(
+-                x[idx, 0], x[idx, 1],
+-                marker=marker, color=marker_color, s=marker_size, zorder=10
+-            )
++            ax.scatter(x[idx, 0], x[idx, 1], marker=marker, color=marker_color, s=marker_size, zorder=10)
+     return ax
++
+ 
+ 
+ def plot_rslds_observations(model=None, posterior=None, data=None, method="laplace_em",
+@@ -673,42 +677,41 @@
+                             ax=None, line_style="-", line_width=2, color=None, label=None,
+                             key_time=None, time_range=None, bin_size=None,
+                             marker='x', marker_size=80, marker_color='red',
+-                            concat_trials=False):
+-
++                            concat_trials=False, trial_idx=0):
++    """
++    Plot observed neural activity for a single trial colored by inferred states.
++    If `data`/`y`/`z` are lists, `trial_idx` chooses which trial to plot.
++    """
++    # Build y (T, n_neurons)
+     if y is None:
+-        if data is None: raise ValueError("data or y is required")
+-        elif data is not None and data.ndim == 3:
+-            Warning("Input data is 3D, running prepare_rslds_data")
+-            data_flat = prepare_rslds_data(data, concat_trials=concat_trials)
++        if data is None:
++            raise ValueError("data or y is required")
++        data_prep = prepare_rslds_data(data, concat_trials=concat_trials) if not isinstance(data, list) else data
++        if isinstance(data_prep, list):
++            y = data_prep[trial_idx][:, :n_neurons]
+         else:
+-            data_flat = data
+-        data_ssm = data_flat.T  # Shape: (n_timepoints, n_neurons)
+-        y = data_ssm[:, :n_neurons]
+-    
+-
+-    if model is not None:
+-        z, x = get_inferred_states(model, posterior, data, method=method)
+-    else:
+-        z = np.asarray(z)
+-
+-
++            y = data_prep.T[:, :n_neurons]
++    # Align z with the chosen trial
++    if model is not None and posterior is not None and z is None:
++        z, _x = get_inferred_states(model, posterior, data if y is None else data_prep, method=method)
++    if isinstance(z, list):
++        z = z[trial_idx]
++    z = np.asarray(z) if z is not None else np.zeros(y.shape[0], dtype=int)
++    # Compute change points
+     zcps = np.concatenate(([0], np.where(np.diff(z))[0] + 1, [z.size]))
+-
+     if ax is None:
+         fig = plt.figure(figsize=(4, 4))
+         ax = fig.gca()
+-    if color is None: color = 'blue'
+-
++    if color is None:
++        color = 'blue'
+     T, N = y.shape
+     t = np.arange(T)
+     for n in range(N):
+         for start, stop in zip(zcps[:-1], zcps[1:]):
+-            alpha = (start + 1) / z.size # goes from ~0 to 1
+-            if isinstance(color, str): plot_color = color
+-            else: plot_color = color[z[start] % len(color)]
++            alpha = (start + 1) / z.size
++            plot_color = color if isinstance(color, str) else color[z[start] % len(color)]
+             ax.plot(t[start:stop + 1], y[start:stop + 1, n],
+-                    lw=line_width, ls=line_style,
+-                    color=plot_color, alpha=alpha, label=label)
++                    lw=line_width, ls=line_style, color=plot_color, alpha=alpha, label=label)
+     return ax
+ 
+ 
+@@ -761,105 +764,74 @@
+     ax.grid(True, alpha=0.3)
+     return ax
+ 
++
+ def plot_rslds_summary(model, posterior, data, method="laplace_em",
+                 plot_trajectories=True, plot_dynamics=True, plot_observations=True, plot_elbo=True,
+-                n_neurons=3, concat_trials=False):
++                n_neurons=3, concat_trials=False, trial_idx=0):
+     """
+     Comprehensive analysis of rSLDS results with automatic plotting.
+-    
+-    Parameters:
+-    -----------
+-    model : ssm.SLDS
+-        Fitted rSLDS model
+-    posterior : object
+-        Posterior object from fitting
+-    data : np.ndarray
+-        Original input data
+-    method : str
+-        Method to use for inference: "laplace_em" or "bbvi"
+-    new_fig : bool
+-        Whether to create a new figure (default: True)
+-    plot_trajectories : bool
+-        Whether to plot state trajectories (default: False)
+-    plot_dynamics : bool
+-        Whether to plot system dynamics (default: False)
+-    plot_observations : bool
+-        Whether to plot observations (default: False)
+-    plot_elbo : bool
+-        Whether to plot ELBO convergence (default: False)
+-        
+-    Returns:
+-    --------
+-    results : dict
+-        Dictionary containing all analysis results
+-    """
+-    # Prepare data
+-    data = prepare_rslds_data(data, concat_trials=concat_trials)
+-
+-    # Get inferred states (default to laplace_em method)
+-    z_inferred, x_inferred = get_inferred_states(model, posterior, data, method="laplace_em")
+-    
+-    # Handle different input shapes for plotting
+-    if data.ndim == 3:
+-        data_flat = np.mean(data, axis=1)  # shape: (n_neurons, n_timebins)
++    Supports 2D arrays, 3D arrays, or list-of-trials. When trials are provided,
++    `trial_idx` chooses which trial to visualize.
++    """
++    # Prepare data in the new convention
++    data_prep = prepare_rslds_data(data, concat_trials=concat_trials) if not isinstance(data, list) else data
++    # Inference
++    z_inf, x_inf = get_inferred_states(model, posterior, data_prep, method=method)
++    # Select trial if needed for plotting
++    if isinstance(z_inf, list):
++        z_plot = z_inf[trial_idx]
++        x_plot = x_inf[trial_idx]
++        y_plot = data_prep[trial_idx][:, :n_neurons]
++        data_shape = (len(data_prep),) + data_prep[0].shape
+     else:
+-        data_flat = data
+-    
+-    data_ssm = data_flat.T  # Shape: (n_timepoints, n_neurons)
+-    
+-    # Store results
++        z_plot = z_inf
++        x_plot = x_inf
++        y_plot = (data_prep.T)[:, :n_neurons]
++        data_shape = getattr(data, "shape", ("unknown",))
+     results = {
+         'model': model,
+         'posterior': posterior,
+-        'z_inferred': z_inferred,
+-        'x_inferred': x_inferred,
+-        'data_shape': data.shape,
++        'z_inferred': z_inf,
++        'x_inferred': x_inf,
++        'data_shape': data_shape,
+         'n_states': model.K,
+         'n_latent_dims': model.D,
+-        'method': 'laplace_em'  # Default method for plotting
++        'method': method
+     }
+-    
+-    # Generate a figure with all the plots
++    # Create figure(s)
+     n_plots = 0
+     if plot_trajectories or plot_dynamics: n_plots = 1
+     elif plot_observations: n_plots += 1
+     if plot_elbo: n_plots += 1
+     fig, axes = plt.subplots(1, n_plots, figsize=(20, 6))
+-
+-    # Plot system dynamics if requested
++    # Dynamics
+     if plot_dynamics:
+         ax = axes[0]
+-        x_lim = abs(x_inferred).max(axis=0) + 1 # Calculate appropriate limits
+-        plot_rslds_dynamics(model, 
+-                            xlim=(-x_lim[0], x_lim[0]), 
+-                            ylim=(-x_lim[1], x_lim[1]), 
+-                            ax=ax)
++        x_lim = abs(x_plot).max(axis=0) + 1
++        plot_rslds_dynamics(model, xlim=(-x_lim[0], x_lim[0]), ylim=(-x_lim[1], x_lim[1]), ax=ax)
+         ax.set_title(f"Inferred System Dynamics ({method})")
+         results['dynamics_plot'] = fig
+-
+-    # Plot trajectory on top of dynamics
++    # Trajectory
+     if plot_trajectories:
+         ax = axes[0]
+-        plot_rslds_trajectory(z=z_inferred, x=x_inferred, ax=ax)
++        plot_rslds_trajectory(z=z_plot, x=x_plot, ax=ax)
+         ax.set_title(f"Inferred Latent States ({method})")
+         ax.set_xlabel("Latent Dimension 1")
+         ax.set_ylabel("Latent Dimension 2")
+-    
+-    # Plot observations colored by state
++    # Observations
+     if plot_observations:
+-        ax = axes[1]
+-        plot_rslds_observations(z=z_inferred, y=data_ssm[:, :n_neurons], ax=ax)  # Show first 3 neurons
++        # Place in next subplot slot if dynamics/trajectory used; else first
++        ax = axes[1 if (plot_trajectories or plot_dynamics) else 0]
++        plot_rslds_observations(z=z_plot, y=y_plot, ax=ax)
+         ax.set_title(f"Observations Colored by State ({method})")
+         ax.set_xlabel("Time")
+         ax.set_ylabel("Neural Activity")
+         results['trajectory_plot'] = fig
+-    
+-    # Plot ELBO convergence if requested
++    # ELBO
+     if plot_elbo and hasattr(posterior, 'elbos'):
+-        ax = axes[2]
++        ax = axes[-1]
+         plot_rslds_elbo(posterior.elbos, ax=ax)
+         ax.set_title(f"Convergence ({method})")
+         results['elbo_plot'] = fig
+-    
+     plt.tight_layout()
+-    return results+    return results

@@ -398,10 +398,6 @@ def combine_rates(data=None, key=None, rate_list=None, axis=1, chunks=None, targ
         return np.concatenate([np.asarray(r) for r in rate_list], axis=axis)
 
 
-
-from sklearn.linear_model import LogisticRegressionCV
-from sklearn.model_selection import StratifiedKFold
-
 # Remove trials where any value in the trial (across neurons or bins) is nan
     # This is done for both train and test sets
 def remove_nan_trials(X, y=None):
@@ -415,6 +411,7 @@ def remove_nan_trials(X, y=None):
     else:
         return X[:, keep_mask, :], y[keep_mask]
 
+
 def get_decoders(left_rates, right_rates, 
                     window_size_ms=100, bin_size_ms=50,
                     train_pct=0.8, nCV=5,
@@ -422,6 +419,9 @@ def get_decoders(left_rates, right_rates,
                     penalty='l2',
                     scoring='accuracy',
                     shuffle=True):
+
+    from sklearn.linear_model import LogisticRegressionCV
+    from sklearn.model_selection import StratifiedKFold
 
     # Remove nan trials
     left_rates = remove_nan_trials(left_rates)
@@ -543,9 +543,132 @@ def project(data, decoder=None, cd=None):
         return data
 
 
+def get_time_axis(time_range=(-1,2), bin_size_ms=50):
+    n_bins = int(np.round((time_range[1] - time_range[0]) / (bin_size_ms/1000)))
+    xaxis = np.linspace(time_range[0],time_range[1],n_bins)
+    
+    return xaxis
+
+
+def downsample(
+    data: np.ndarray,
+    target_bin_size_ms: int = 100,
+    original_bin_size_ms: int | None = None,
+    method: str = "mean",
+    axis: int = -1,
+    remainder: str = "drop",   # "drop" leftover bins or "pad" with NaNs before aggregating
+):
+    """
+    Downsample binned spiking data by aggregating consecutive time bins.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Array of shape (nNeurons, nTrials, nBins) by default. The aggregation
+        is applied along `axis` (the bin axis).
+    target_bin_size_ms : int
+        Desired bin size after downsampling (must be an integer multiple of the original).
+    original_bin_size_ms : int
+        Original bin size (ms). Required to compute the downsampling factor.
+    method : {"mean", "sum"}
+        Aggregation across consecutive bins.
+    axis : int
+        Axis corresponding to time bins. Default is last axis (-1).
+    remainder : {"drop", "pad"}
+        If the number of bins isn’t divisible by the factor:
+          - "drop": drop the leftover tail bins
+          - "pad":  pad with NaNs to the next multiple (uses nanmean/nansum)
+
+    Returns
+    -------
+    out : np.ndarray
+        Downsampled array with the same number/order of non-time axes and
+        a reduced number of bins along `axis`.
+    new_bin_size_ms : int
+        The resulting bin size in ms (equals target_bin_size_ms).
+
+    Raises
+    ------
+    ValueError
+        If original_bin_size_ms is missing, target < original (upsampling),
+        or the factor is not an integer (within tolerance).
+    """
+    if original_bin_size_ms is None:
+        raise ValueError("original_bin_size_ms must be provided.")
+
+    # Compute integer factor
+    factor_float = target_bin_size_ms / original_bin_size_ms
+    factor = int(round(factor_float))
+    if factor_float < 1:
+        raise ValueError("target_bin_size_ms must be >= original_bin_size_ms (no upsampling).")
+    if not np.isclose(factor_float, factor):
+        raise ValueError(
+            f"target_bin_size_ms must be an integer multiple of original_bin_size_ms. "
+            f"Got {target_bin_size_ms}/{original_bin_size_ms}={factor_float:.4f}."
+        )
+
+    # Normalize axis to be positive and move it to the last position
+    axis = axis % data.ndim
+    x = np.moveaxis(data, axis, -1)
+    n_bins = x.shape[-1]
+
+    # Handle remainder
+    remainder = remainder.lower()
+    if remainder not in {"drop", "pad"}:
+        raise ValueError("remainder must be 'drop' or 'pad'.")
+
+    if n_bins % factor != 0:
+        if remainder == "drop":
+            n_keep = (n_bins // factor) * factor
+            if n_keep == 0:
+                raise ValueError(
+                    f"Not enough bins ({n_bins}) for factor {factor}. "
+                    "Increase target_bin_size_ms or provide more bins."
+                )
+            Warning(
+                f"Dropping {n_bins - n_keep} leftover bins (not divisible by factor={factor}).",
+                RuntimeWarning
+            )
+            x = x[..., :n_keep]
+        else:  # pad
+            n_needed = ((n_bins + factor - 1) // factor) * factor
+            pad_width = n_needed - n_bins
+            # Promote to float to allow NaNs if needed
+            if not np.issubdtype(x.dtype, np.floating):
+                x = x.astype(float, copy=False)
+            pad_shape = list(x.shape)
+            pad_shape[-1] = pad_width
+            pad_vals = np.full(pad_shape, np.nan, dtype=x.dtype)
+            x = np.concatenate([x, pad_vals], axis=-1)
+
+    # Reshape to group consecutive bins of size `factor`
+    new_n_bins = x.shape[-1] // factor
+    x = x.reshape(*x.shape[:-1], new_n_bins, factor)
+
+    # Aggregate
+    method = method.lower()
+    if method == "mean":
+        out = np.nanmean(x, axis=-1)  # nan-safe if padded
+    elif method == "sum":
+        # Use nansum to be consistent with "pad" behavior
+        out = np.nansum(x, axis=-1)
+    else:
+        raise ValueError("method must be 'mean' or 'sum'.")
+
+    # Move time axis back to original position
+    out = np.moveaxis(out, -1, axis)
+    return out
+
+
 
 def get_window(data, onset_time=0, window_ms=(0,100), 
-                time_range=(-1,2), bin_size_ms=50):
+               xaxis=None, bin_size_ms=25, original_bin_size_ms=None,
+               return_xaxis=False):
+
+    # onset_time is in seconds
+
+    # 0) check if bin_size_ms and original_bin_size_ms are provided
+
 
     # 1) find the bin‐indices for response window
     start_ms, end_ms = window_ms
@@ -554,16 +677,20 @@ def get_window(data, onset_time=0, window_ms=(0,100),
 
     # 2) find the onset bin
     # Compute the time axis based on time_range and bin_size_ms
-    n_bins = data.shape[2]
-    t_start, t_end = time_range
-    xaxis = np.linspace(t_start, t_end, n_bins)
+    if xaxis is None:
+        window_time_range = (onset_time + start_ms, onset_time + end_ms)
+        xaxis = get_time_axis(window_time_range, bin_size_ms)
+    n_bins = len(xaxis)
     onset_bin = np.argmin(np.abs(xaxis - onset_time))
 
     # 3) make it continuous
     beg = max(0, onset_bin + start_offset_bins)
     end = min(n_bins, onset_bin + end_offset_bins)
 
-    return data[:, :, beg:end]
+    if return_xaxis:
+        return data[:, :, beg:end], xaxis[beg:end]
+    else:
+        return data[:, :, beg:end]
 
 
 
@@ -622,6 +749,8 @@ def get_mod_index(data0, data1, type='norm'):
         d_prime = (mean_0 - mean_1) / np.sqrt((var_0 + var_1) / 2 + 1e-12)  # add epsilon to avoid div by zero
         return d_prime
         
+
+
 def make_orthogonal(cd_a, cd_b):
     """
     Make CD A orthogonal to CD B using the Gram-Schmidt process.

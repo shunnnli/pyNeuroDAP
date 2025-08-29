@@ -22,6 +22,8 @@ from .spikes import (
     get_decoders,
     project,
     get_window,
+    downsample,
+    get_time_axis,
     get_mod_index,
     make_orthogonal,
 )
@@ -38,7 +40,8 @@ from .models import (
     compare_rslds_methods,
     save_rslds_model,
     load_rslds_model,
-    list_saved_models
+    list_saved_models,
+    prepare_rslds_data,
 )
 
 from .trials import (
@@ -80,7 +83,8 @@ from .gui import (
 from .mat import (
     load_mat,
     convert_params_from_mat,
-    convert_spikes_from_mat
+    convert_spikes_from_mat,
+    convert_behaviors_from_mat
 )
 
 # Define what gets imported with "from pyNeuroDAP import *"
@@ -92,7 +96,9 @@ __all__ = [
     'get_decoders',
     'project',
     'get_window',
-    'get_mod_index',
+    'downsample',
+    'get_time_axis',
+    'get_mod_index', 
     'make_orthogonal',
     
     # SSM-based rSLDS modeling
@@ -108,6 +114,7 @@ __all__ = [
     'save_rslds_model',
     'load_rslds_model',
     'list_saved_models',
+    'prepare_rslds_data',
     
     # Trial management
     'get_trial_table',
@@ -144,5 +151,6 @@ __all__ = [
     # MATLAB file utilities
     'load_mat',
     'convert_params_from_mat',
-    'convert_spikes_from_mat'
+    'convert_spikes_from_mat',
+    'convert_behaviors_from_mat'
 ]
