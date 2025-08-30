@@ -316,6 +316,7 @@ def get_inferred_states(model, posterior, data, method="laplace_em"):
 
 import numpy as np
 import joblib
+import os
 
 def _to_list(arr_or_list):
     if arr_or_list is None:
@@ -329,8 +330,8 @@ def _to_list(arr_or_list):
 
 
 
-def save_rslds_model(model, posterior, data, bundle_name="rslds_run.joblib", *, elbos=None, compress=3,
-                     time_range=None, bin_size=None):
+def save_rslds_model(model, posterior, data, file_name="rslds_run.joblib", *, elbos=None, compress=3,
+                     time_range=None, bin_size=None, folder_name=None):
     """
     Save everything needed to recreate plots—no re-fit required.
     `data` can be Y or (Y, U) from prepare_rslds_data.
@@ -389,13 +390,15 @@ def save_rslds_model(model, posterior, data, bundle_name="rslds_run.joblib", *, 
     )
 
     # Create save path
-    from datetime import datetime
-    import os
-    today = datetime.now().strftime("%Y%m%d")
-    save_path = f"Results/rslds_models/rslds-{today}/"
+    if folder_name is None:
+        from datetime import datetime
+        today = datetime.now().strftime("%Y%m%d")
+        save_path = f"Results/rslds_models/rslds-{today}/"
+    else:
+        save_path = f"Results/rslds_models/{folder_name}/"
     # Make directory if it doesn't exist
     os.makedirs(save_path, exist_ok=True)
-    save_path = f"{save_path}/{bundle_name}"
+    save_path = f"{save_path}/{file_name}"
     joblib.dump(bundle, save_path, compress=compress)
     return save_path
 

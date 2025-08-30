@@ -93,7 +93,7 @@ def convert_behaviors_from_mat(session_mat, user='shun'):
         
         event_times = {}
         # behavior_keys = ['cueIdx','rewardTrialsNum','omissionTrialsNum','missTrialsNum']
-        lick_keys = ['lick','lickIdx_rewardTrial','lickIdx_omissionTrial']
+        # lick_keys = ['lick','lickIdx_rewardTrial','lickIdx_omissionTrial']
 
         cueIdx = session_mat['cueIdx'].flatten()
         reward_trials_num = session_mat['rewardTrialsNum'].flatten()
@@ -107,8 +107,10 @@ def convert_behaviors_from_mat(session_mat, user='shun'):
         }
 
         # TODO: subset lick data to different number of lick
-        for key in lick_keys:
-            event_times[key] = session_mat[key][0]
+        event_times['licks'] = {
+            'reward_control': session_mat['lickIdx_rewardTrial'],
+            'omission_control': session_mat['lickIdx_omissionTrial']
+        }
 
         return event_times
 
