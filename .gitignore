@@ -183,6 +183,7 @@ cython_debug/
 # Data stuff
 Rec_*/
 Data/
+Results/
 
 # ssm folder
 ssm/
