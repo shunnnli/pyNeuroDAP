@@ -329,7 +329,8 @@ def _to_list(arr_or_list):
 
 
 
-def save_rslds_model(model, posterior, data, bundle_name="rslds_run.joblib", *, elbos=None, compress=3):
+def save_rslds_model(model, posterior, data, bundle_name="rslds_run.joblib", *, elbos=None, compress=3,
+                     time_range=None, bin_size=None):
     """
     Save everything needed to recreate plots—no re-fit required.
     `data` can be Y or (Y, U) from prepare_rslds_data.
@@ -379,7 +380,10 @@ def save_rslds_model(model, posterior, data, bundle_name="rslds_run.joblib", *, 
         params=params,
         posterior=dict(x_list=x_list, z_list=z_list,
                        elbos=np.asarray(elbos) if elbos is not None else None),
-        data=dict(Y_list=Y_list, U_list=U_list),
+        time_range=time_range,
+        bin_size=bin_size,
+        data=dict(Y_list=Y_list, U_list=U_list, time_range=time_range, bin_size=bin_size),
+        
         # also tuck originals so you can keep using your existing plotting funcs
         objects=dict(model=model, posterior=posterior)
     )
@@ -415,13 +419,14 @@ def _mode_per_time(Z_stack):
         out[t] = np.argmax(counts)
     return out
 
+
 def plot_rslds_trajectory(model=None, posterior=None, data=None, 
-                          method="laplace_em", zscore=True, trial_types=None,
-                            z=None, x=None, ax=None, 
-                            line_style="-", line_width=2, color=None, label=None,
-                            key_time=None, time_range=None, bin_size=None,
-                            marker='x', marker_size=80, marker_color='red',
-                            trial_idx=0):
+                        method="laplace_em", zscore=True, trial_types=None,
+                        z=None, x=None, ax=None, 
+                        line_style="-", line_width=3, color=None, label=None,
+                        key_time=None, time_range=None, bin_size=None,
+                        marker=['o', '>', 'x'], marker_size=80, marker_color='red',
+                        trial_idx=0):
     """
     Plot a single-trial latent trajectory (2-D) colored by discrete state.
     If `data`/`x`/`z` are lists, `trial_idx` chooses which trial to plot.
@@ -480,22 +485,36 @@ def plot_rslds_trajectory(model=None, posterior=None, data=None,
     if color is None:
         color = 'blue'
     for start, stop in zip(zcps[:-1], zcps[1:]):
-        alpha = (start + 1) / z.size
+        frac = start / max(1, (z.size - 1))
+        alpha = 0.25 + 0.75 * frac          # min 0.25, max 1.0
         plot_color = color if isinstance(color, str) else color[z[start] % len(color)]
         ax.plot(x[start:stop + 1, 0], x[start:stop + 1, 1],
                 lw=line_width, ls=line_style, color=plot_color, alpha=alpha, label=label)
+    
     # Optional markers
     if key_time is not None:
         if not isinstance(key_time, (list, tuple, np.ndarray)):
             key_time = [key_time]
-        for kt in key_time:
+
+        if bin_size is not None:
+            bin_size_s = float(bin_size) / 1000.0 if (bin_size is not None and bin_size > 1) else float(bin_size)
+        
+        for kt_idx, kt in enumerate(key_time):
             if time_range is not None and bin_size is not None:
                 rel_kt = kt - time_range[0]
-                idx = int(round(rel_kt / bin_size))
+                idx = int(round(rel_kt / bin_size_s))
             else:
                 idx = int(round(kt))
             idx = max(0, min(idx, x.shape[0] - 1))
-            ax.scatter(x[idx, 0], x[idx, 1], marker=marker, color=marker_color, s=marker_size, zorder=10)
+            ax.scatter(x[idx, 0], x[idx, 1], marker=marker[kt_idx], color=marker_color, s=marker_size, zorder=10)
+
+    # Update plot limits
+    x0_min, x0_max = ax.get_xlim()
+    y0_min, y0_max = ax.get_ylim()
+    x1_min, x1_max = x[:, 0].min() - 0.5, x[:, 0].max() + 0.5
+    y1_min, y1_max = x[:, 1].min() - 0.5, x[:, 1].max() + 0.5
+    ax.set_xlim(min(x0_min, x1_min), max(x0_max, x1_max))
+    ax.set_ylim(min(y0_min, y1_min), max(y0_max, y1_max))
     return ax
 
 
@@ -565,32 +584,57 @@ def plot_rslds_observations(model=None, posterior=None, data=None, method="lapla
 
 
 
-def get_plot_lims(posterior, method="laplace_em"):
-    if method == "laplace_em":
-        pcs = posterior.mean_continuous_states
-    elif method == "bbvi":
-        pcs = posterior.mean
-    else:
-        raise ValueError(f"Unknown method: {method}")
-    # collect all latents
-    X = np.vstack(pcs) if isinstance(pcs, (list, tuple)) else pcs
-    X2 = X[:, :2] if X.shape[1] > 2 else X
+def set_plot_lims(data=None, ax=None, method="laplace_em"):
 
-    # tight limits with a little margin
-    pad = 0.5
-    xlim = (X2[:,0].min() - pad, X2[:,0].max() + pad)
-    ylim = (X2[:,1].min() - pad, X2[:,1].max() + pad)
+    if data is None and ax is not None:
+        # just return the current xlim and ylim
+        xlim = ax.get_xlim()
+        ylim = ax.get_ylim()
+        return xlim, ylim
+
+    # if ax not provided, then data is a posterior
+    elif ax is None and data is not None:
+        if method == "laplace_em":
+            pcs = data.mean_continuous_states
+        elif method == "bbvi":
+            pcs = data.mean
+        else:
+            raise ValueError(f"Unknown method: {method}")
+        # collect all latents
+        X = np.vstack(pcs) if isinstance(pcs, (list, tuple)) else pcs
+        X2 = X[:, :2] if X.shape[1] > 2 else X
+
+        # tight limits with a little margin
+        pad = 0.5
+        xlim = (X2[:,0].min() - pad, X2[:,0].max() + pad)
+        ylim = (X2[:,1].min() - pad, X2[:,1].max() + pad)
+
+    elif ax is not None and data is not None:
+        x0_min, x0_max = ax.get_xlim()
+        y0_min, y0_max = ax.get_ylim()
+        x1_min, x1_max = data[:, 0].min() - 0.5, data[:, 0].max() + 0.5
+        y1_min, y1_max = data[:, 1].min() - 0.5, data[:, 1].max() + 0.5
+        xlim = (min(x0_min, x1_min), max(x0_max, x1_max))
+        ylim = (min(y0_min, y1_min), max(y0_max, y1_max))
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
     return xlim, ylim
 
 
 
 def plot_rslds_dynamics(model=None, posterior=None, method="laplace_em",
-    xlim=(-4, 4), ylim=(-3, 3), nxpts=20, nypts=20,
+                        xlim=None, ylim=None, nxpts=20, nypts=20,
                         alpha=0.8, ax=None, figsize=(3, 3), colormap=None):
 
     # Get the limits for the plot
-    if posterior is not None:
-        xlim, ylim = get_plot_lims(posterior, method)
+    if xlim is None or ylim is None:
+        if posterior is not None:
+            xlim, ylim = set_plot_lims(data=posterior, method=method)
+        elif ax is not None:
+            xlim, ylim = set_plot_lims(ax=ax)
+    else:
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
 
     if colormap is None:
         colormap = plt.get_cmap('Paired')
@@ -630,8 +674,8 @@ def plot_rslds_elbo(elbos, ax=None):
     if ax is None:
         fig = plt.figure(figsize=(4, 4))
         ax = fig.gca()
-        ax.plot(elbos, 'b-', linewidth=2)
-        ax.set_xlabel("Iteration")
-        ax.set_ylabel("ELBO")
-        ax.grid(True, alpha=0.3)
+    ax.plot(elbos, 'b-', linewidth=2)
+    ax.set_xlabel("Iteration")
+    ax.set_ylabel("ELBO")
+    ax.grid(True, alpha=0.3)
     return ax

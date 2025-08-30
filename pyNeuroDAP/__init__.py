@@ -11,7 +11,7 @@ A comprehensive package for analyzing neural data including:
 Author: Shun Li
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 __author__ = "Shun Li"
 
 # Import main functionality from modules
@@ -38,7 +38,7 @@ from .models import (
     save_rslds_model,
     load_rslds_model,
     prepare_rslds_data,
-    get_plot_lims,
+    set_plot_lims,
 )
 
 from .trials import (
@@ -108,7 +108,7 @@ __all__ = [
     'save_rslds_model',
     'load_rslds_model',
     'prepare_rslds_data',
-    'get_plot_lims',
+    'set_plot_lims',
     
     # Trial management
     'get_trial_table',
