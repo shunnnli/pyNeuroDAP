@@ -11,7 +11,7 @@ A comprehensive package for analyzing neural data including:
 Author: Shun Li
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __author__ = "Shun Li"
 
 # Import main functionality from modules
