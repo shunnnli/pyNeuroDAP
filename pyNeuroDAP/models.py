@@ -49,7 +49,20 @@ def _unwrap_Y_U(data):
     return Y, U
 
 
-def prepare_rslds_data(data, trial_types=None, zscore=True):
+def separate_rslds_tuple(Y, U):
+
+    U_arr = np.asarray(U)
+
+    idx1 = np.unique(np.where((U_arr == np.array([0., 1.])).all(axis=1))[0])
+    idx2 = np.unique(np.where((U_arr == np.array([1., 0.])).all(axis=1))[0])
+    type1_tuple = ([Y[i] for i in idx1], [U[i] for i in idx1])
+    type2_tuple = ([Y[i] for i in idx2], [U[i] for i in idx2])
+
+    return type1_tuple, type2_tuple
+
+
+def prepare_rslds_data(data, trial_types=None, zscore=True, n_classes=2,
+                       downsample=True, target_bin_size_ms=50, bin_size_ms=25):
     """
     Prepare observations (and optional trial-type inputs) for rSLDS.
 
@@ -61,6 +74,15 @@ def prepare_rslds_data(data, trial_types=None, zscore=True):
 
     # Make sure data is a numpy array
     data = np.asarray(data)
+
+    # Downsample data
+    if downsample:
+        data = ndap.downsample(data, target_bin_size_ms=target_bin_size_ms, original_bin_size_ms=bin_size_ms)
+        print(f"[prepare_rslds_data] Data downsampled to {target_bin_size_ms} ms")
+
+    # Make sure to fill nan with 0
+    data = np.where(np.isnan(data), 0.0, data)
+    print(f"[prepare_rslds_data] Data filled with 0 for nan")
 
     # 2D: keep old behavior; we can't recover trial boundaries to build inputs
     if data.ndim == 2:
@@ -94,12 +116,18 @@ def prepare_rslds_data(data, trial_types=None, zscore=True):
         if trial_types is None:
             return Y
 
-        idx_per_trial, class_map, M = _one_hot_from_labels(trial_types)
+        # Use n_classes instead of automatically determining M from trial_types
+        M = n_classes
         U = []
         for i in range(S):
             Ti = Y[i].shape[0]
             u = np.zeros((Ti, M), dtype=float)
-            u[:, int(idx_per_trial[i])] = 1.0
+            # Assign trial to class based on trial_types, but ensure it's within n_classes
+            if trial_types[i] < M:
+                u[:, trial_types[i]] = 1.0
+            else:
+                # If trial_type exceeds n_classes, assign to last class
+                u[:, M-1] = 1.0
             U.append(u)
         return (Y, U)
 
@@ -330,8 +358,10 @@ def _to_list(arr_or_list):
 
 
 
-def save_rslds_model(model, posterior, data, file_name="rslds_run.joblib", *, elbos=None, compress=3,
-                     time_range=None, bin_size=None, folder_name=None):
+def save_rslds_model(model, posterior, data,
+                    elbos=None, compress=3,
+                    time_range=None, bin_size=None,
+                    file_name="rslds_run.joblib", folder_name=None, save_path=None):
     """
     Save everything needed to recreate plots—no re-fit required.
     `data` can be Y or (Y, U) from prepare_rslds_data.
@@ -390,15 +420,25 @@ def save_rslds_model(model, posterior, data, file_name="rslds_run.joblib", *, el
     )
 
     # Create save path
-    if folder_name is None:
-        from datetime import datetime
-        today = datetime.now().strftime("%Y%m%d")
-        save_path = f"Results/rslds_models/rslds-{today}/"
+    if save_path is not None:
+        save_path = save_path
     else:
-        save_path = f"Results/rslds_models/{folder_name}/"
-    # Make directory if it doesn't exist
-    os.makedirs(save_path, exist_ok=True)
-    save_path = f"{save_path}/{file_name}"
+        if folder_name is None:
+            from datetime import datetime
+            today = datetime.now().strftime("%Y%m%d")
+            save_path = f"Results/rslds_models/rslds-{today}/"
+        else:
+            save_path = f"Results/rslds_models/{folder_name}/"
+
+    # If save_path end with joblib, just save it there
+    if save_path.endswith('.joblib'):
+        # Make directory if it doesn't exist
+        folder_path = save_path.rstrip('/')
+        os.makedirs(folder_path, exist_ok=True)
+    else:
+        # Make directory if it doesn't exist
+        os.makedirs(save_path, exist_ok=True)
+        save_path = f"{save_path}/{file_name}"
     joblib.dump(bundle, save_path, compress=compress)
     return save_path
 
@@ -426,7 +466,7 @@ def _mode_per_time(Z_stack):
 def plot_rslds_trajectory(model=None, posterior=None, data=None, 
                         method="laplace_em", zscore=True, trial_types=None,
                         z=None, x=None, ax=None, 
-                        line_style="-", line_width=3, color=None, label=None,
+                        line_style="-", line_width=3, color=None, label=None, plot_sem=True,
                         key_time=None, time_range=None, bin_size=None,
                         marker=['o', '>', 'x'], marker_size=80, marker_color='red',
                         trial_idx=0):
@@ -444,11 +484,17 @@ def plot_rslds_trajectory(model=None, posterior=None, data=None,
     else:
         raise ValueError(f"Unknown method: {method}")
 
-    # --- Average across trials when trial_idx is None ---
-    if trial_idx is None and isinstance(Y, list):
+    # --- Average across trials when trial_idx is None or list ---
+    if (trial_idx is None or isinstance(trial_idx, (list, tuple))) and isinstance(Y, list):
+        # Determine which trials to include
+        if trial_idx is None:
+            trial_indices = list(range(len(Y)))
+        else:
+            trial_indices = trial_idx
+        
         # collect x_i, z_i per trial
         x_list, z_list, T_list = [], [], []
-        for i in range(len(Y)):
+        for i in trial_indices:
             x_i = pcs[i] if isinstance(pcs, (list, tuple)) else pcs
             if x_i.shape[1] > 2:
                 x_i = x_i[:, :2]
@@ -460,6 +506,7 @@ def plot_rslds_trajectory(model=None, posterior=None, data=None,
             T_list.append(x_i.shape[0])
         T = int(min(T_list))
         x = np.mean([xi[:T] for xi in x_list], axis=0)           # (T,2)
+        x_sem = np.std([xi[:T] for xi in x_list], axis=0) / np.sqrt(len(trial_indices))  # (T,2)
         Z_stack = np.stack([zi[:T] for zi in z_list], axis=0)    # (S,T)
         z = _mode_per_time(Z_stack)                              # (T,)
     else:
@@ -487,12 +534,39 @@ def plot_rslds_trajectory(model=None, posterior=None, data=None,
         ax = fig.gca()
     if color is None:
         color = 'blue'
-    for start, stop in zip(zcps[:-1], zcps[1:]):
-        frac = start / max(1, (z.size - 1))
-        alpha = 0.25 + 0.75 * frac          # min 0.25, max 1.0
-        plot_color = color if isinstance(color, str) else color[z[start] % len(color)]
-        ax.plot(x[start:stop + 1, 0], x[start:stop + 1, 1],
-                lw=line_width, ls=line_style, color=plot_color, alpha=alpha, label=label)
+
+    # Check if we have SEM data (averaging over trials)
+    has_sem = 'x_sem' in locals()
+    
+    if has_sem and plot_sem:
+        # Plot with SEM shading for averaged trials
+        for i in range(x.shape[0] - 1):
+            frac = i / max(1, (x.shape[0] - 1))
+            alpha = 0.1 + 0.9 * frac
+            
+            plot_color = color if isinstance(color, str) else color[z[i] % len(color)]
+            ax.plot(x[i:i+2, 0], x[i:i+2, 1],
+                    lw=line_width, ls=line_style, color=plot_color, alpha=alpha, label=label if i == 0 else "")
+        
+            # Add SEM shading
+            ax.fill_between(x[i:i+2, 0], x[i:i+2, 1] - x_sem[i:i+2, 1], x[i:i+2, 1] + x_sem[i:i+2, 1],
+                        color=color if isinstance(color, str) else color[0], alpha=alpha*0.2, linewidth=0)
+    else:
+        # Plot single trial point by point
+        for i in range(x.shape[0] - 1):
+            frac = i / max(1, (x.shape[0] - 1))
+            alpha = 0.1 + 0.9 * frac
+            
+            plot_color = color if isinstance(color, str) else color[z[i] % len(color)]
+            ax.plot(x[i:i+2, 0], x[i:i+2, 1],
+                    lw=line_width, ls=line_style, color=plot_color, alpha=alpha, label=label if i == 0 else "")
+    # for start, stop in zip(zcps[:-1], zcps[1:]):
+    #     frac = start / max(1, (x.shape[0] - 1))
+    #     alpha = 0.25 + 0.75 * frac          # min 0.25, max 1.0
+    #     print(f"frac: {frac}, alpha: {alpha}")
+    #     plot_color = color if isinstance(color, str) else color[z[start] % len(color)]
+    #     ax.plot(x[start:stop + 1, 0], x[start:stop + 1, 1],
+    #             lw=line_width, ls=line_style, color=plot_color, alpha=alpha, label=label)
     
     # Optional markers
     if key_time is not None:

@@ -26,6 +26,7 @@ from .spikes import (
     get_time_axis,
     get_mod_index,
     make_orthogonal,
+    convert_dask_to_numpy
 )
 
 from .models import (
@@ -39,6 +40,7 @@ from .models import (
     load_rslds_model,
     prepare_rslds_data,
     set_plot_lims,
+    separate_rslds_tuple,
 )
 
 from .trials import (
@@ -56,7 +58,7 @@ from .sessions import (
     save_variables,
     load_variables,
     load_session_data,
-    get_file_info
+    get_file_info,
 )
 
 from .plots import (
@@ -97,7 +99,8 @@ __all__ = [
     'get_time_axis',
     'get_mod_index', 
     'make_orthogonal',
-    
+    'convert_dask_to_numpy',
+
     # SSM-based rSLDS modeling
     'fit_rslds_model',
     'get_inferred_states',
@@ -109,6 +112,7 @@ __all__ = [
     'load_rslds_model',
     'prepare_rslds_data',
     'set_plot_lims',
+    'separate_rslds_tuple',
     
     # Trial management
     'get_trial_table',
@@ -125,7 +129,7 @@ __all__ = [
     'load_variables',
     'load_session_data',
     'get_file_info',
-    
+
     # Visualization
     'plot_psth',
     'plot_raster',

@@ -355,7 +355,9 @@ def combine_rates(data=None, key=None, rate_list=None, axis=1, chunks=None, targ
 
         # Decide base chunks for non-concat axes
         def _fallback_chunks(shape):
-            return (min(64, shape[0]), min(128, shape[1]), min(128, shape[2])) if len(shape) == 3 else None
+            fallback_chunk = (min(64, shape[0]), min(128, shape[1]), min(128, shape[2])) if len(shape) == 3 else None
+            fallback_chunk_np = convert_dask_to_numpy(fallback_chunk)
+            return fallback_chunk_np
 
         base = None
         for r in rate_list:
@@ -390,12 +392,14 @@ def combine_rates(data=None, key=None, rate_list=None, axis=1, chunks=None, targ
             if time_axis != axis:
                 out = out.rechunk({time_axis: int(target_time_chunk)})
 
+        out = convert_dask_to_numpy(out)
         return out
 
     except Exception:
         # Fallback: eager numpy concat (will load to RAM)
         import numpy as np
-        return np.concatenate([np.asarray(r) for r in rate_list], axis=axis)
+        out = np.concatenate([np.asarray(r) for r in rate_list], axis=axis)
+        return convert_dask_to_numpy(out)
 
 
 # Remove trials where any value in the trial (across neurons or bins) is nan
@@ -595,6 +599,9 @@ def downsample(
     """
     if original_bin_size_ms is None:
         raise ValueError("original_bin_size_ms must be provided.")
+    
+    if target_bin_size_ms == original_bin_size_ms:
+        return data
 
     # Compute integer factor
     factor_float = target_bin_size_ms / original_bin_size_ms
@@ -649,6 +656,8 @@ def downsample(
     method = method.lower()
     if method == "mean":
         out = np.nanmean(x, axis=-1)  # nan-safe if padded
+        # Replace NaN results from empty slices with 0 or another value
+        out = np.where(np.isnan(out), 0.0, out)
     elif method == "sum":
         # Use nansum to be consistent with "pad" behavior
         out = np.nansum(x, axis=-1)
@@ -780,3 +789,25 @@ def make_orthogonal(cd_a, cd_b):
         cd_a_orthogonal = cd_a_orthogonal / cd_a_orthogonal_norm
     
     return cd_a_orthogonal
+
+
+def convert_dask_to_numpy(dask_array):
+    """
+    Convert a Dask array to NumPy array, handling unknown chunk sizes.
+    
+    Parameters:
+    -----------
+    dask_array : dask.array.Array
+        The Dask array to convert
+        
+    Returns:
+    --------
+    numpy.ndarray
+        The converted NumPy array
+    """
+    if hasattr(dask_array, 'compute_chunk_sizes'):
+        return dask_array.compute_chunk_sizes().compute()
+    elif hasattr(dask_array, 'compute'):
+        return dask_array.compute()
+    else:
+        return dask_array
