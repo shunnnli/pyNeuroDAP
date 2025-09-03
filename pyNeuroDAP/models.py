@@ -116,18 +116,14 @@ def prepare_rslds_data(data, trial_types=None, zscore=True, n_classes=2,
         if trial_types is None:
             return Y
 
-        # Use n_classes instead of automatically determining M from trial_types
-        M = n_classes
+        
+        # trial_types is already one-hot encoded (e.g., [[1,0], [0,1], [1,0], ...])
+        trial_types = np.asarray(trial_types)
         U = []
         for i in range(S):
             Ti = Y[i].shape[0]
-            u = np.zeros((Ti, M), dtype=float)
-            # Assign trial to class based on trial_types, but ensure it's within n_classes
-            if trial_types[i] < M:
-                u[:, trial_types[i]] = 1.0
-            else:
-                # If trial_type exceeds n_classes, assign to last class
-                u[:, M-1] = 1.0
+            # Repeat the one-hot vector for all time points in this trial
+            u = np.tile(trial_types[i], (Ti, 1))
             U.append(u)
         return (Y, U)
 
