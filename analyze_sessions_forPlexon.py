@@ -8,7 +8,15 @@ from tqdm import tqdm
 
 # Select multiple sessions using GUI
 print("Please select session folders for analysis...")
-session_folders = ndap.select_sessions("Select Session Folders for Analysis")
+# session_folders = ndap.select_sessions("Select Session Folders for Analysis")
+session_folders = ["/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_DCN_1_250323_5mW_500ms_500delay_032325001",
+                "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_DCN_1_250328_Licking_032825001",
+                "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_DCN_1_250411_MixedmW_500ms_041225001",
+                "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_SNr_3_250607_laser2point5mW_500ms_500delay_060725001",
+                "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_SNr_3_250608_laser2point5mW_500ms_0delay_060825001",
+                "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_SNr_4_250615_500delay_500ms_5mW_Licking_061525001",
+                "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_SNr_4_250616_500ms_5mW_061625001",
+]
 
 if not session_folders:
     print("No sessions selected. Exiting.")
@@ -29,7 +37,8 @@ if not session_params:
 
 # Define parameters common to all sessions
 bin_size = 25           # in ms
-time_range = (-1,2)     # in sec
+time_range = (-1,5)     # in sec
+xaxis = ndap.get_time_axis(time_range, bin_size_ms=bin_size)
 trial_conditions = [
     'reward_right_laser', 'reward_left_laser', 'nonreward_right_laser', 'nonreward_left_laser',
     'reward_right_control', 'reward_left_control', 'nonreward_right_control', 'nonreward_left_control'
