@@ -1,0 +1,3 @@
+[submodule "findr"]
+	path = findr
+	url = https://github.com/Brody-Lab/findr
