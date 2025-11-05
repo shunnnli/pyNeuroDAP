@@ -2,13 +2,49 @@ import re
 import numpy as np
 import pandas as pd
 import scipy.io as sio
+import h5py
 
 
-def load_mat(mat_path):
+# Load data from matlab file
+def load_mat(file_path):
     """
-    Load a MATLAB file and return the data as a dictionary.
+    Load MATLAB files with proper struct handling for both v7.2 and v7.3 formats
     """
-    return sio.loadmat(mat_path)
+    try:
+        # First try with scipy.io.loadmat (for older MATLAB versions)
+        mat_data = sio.loadmat(file_path, struct_as_record=False, squeeze_me=True)
+        return mat_data
+    except NotImplementedError:
+        # If it's a v7.3 file, use mat73 for proper struct handling
+        try:
+            import mat73
+            mat_data = mat73.loadmat(file_path)
+            return mat_data
+        except ImportError:
+            # Fallback to basic h5py (less reliable for structs)
+            mat_data = {}
+            with h5py.File(file_path, 'r') as f:
+                for key in f.keys():
+                    if not key.startswith('#'):  # Skip metadata keys
+                        dataset = f[key]
+                        if isinstance(dataset, h5py.Group):
+                            # Handle structs properly
+                            struct_data = {}
+                            for field in dataset.keys():
+                                if not field.startswith('#'):
+                                    field_data = np.array(dataset[field])
+                                    # MATLAB stores arrays transposed
+                                    if field_data.ndim > 1:
+                                        field_data = field_data.T
+                                    struct_data[field] = field_data
+                            mat_data[key] = struct_data
+                        else:
+                            # Regular array
+                            data = np.array(dataset)
+                            if data.ndim > 1:
+                                data = data.T
+                            mat_data[key] = data
+            return mat_data
 
 
 def convert_params_from_mat(session_mat, exclude_keys=None):
