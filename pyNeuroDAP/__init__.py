@@ -17,6 +17,7 @@ __author__ = "Shun Li"
 # Import main functionality from modules
 from .spikes import (
     get_spikes,
+    subtract_baseline_rate,
     combine_rates,
     remove_nan_trials,
     get_decoders,
@@ -26,7 +27,8 @@ from .spikes import (
     get_time_axis,
     get_mod_index,
     make_orthogonal,
-    convert_dask_to_numpy
+    convert_dask_to_numpy,
+    parse_time_range,
 )
 
 from .models import (
@@ -90,6 +92,7 @@ from .mat import (
 __all__ = [
     # Core spike analysis
     'get_spikes',
+    'subtract_baseline_rate',
     'combine_rates',
     'remove_nan_trials',
     'get_decoders',
@@ -100,6 +103,7 @@ __all__ = [
     'get_mod_index', 
     'make_orthogonal',
     'convert_dask_to_numpy',
+    'parse_time_range',
 
     # SSM-based rSLDS modeling
     'fit_rslds_model',

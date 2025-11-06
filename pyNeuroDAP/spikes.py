@@ -11,7 +11,25 @@ def get_spikes(spikes, event_times,
                     same_system=True,
                     params=None,
                     include_units=None,
+                    subtract_baseline=False,
                     verbose=False):
+
+    """
+    Extracts and aligns spike times from a list of units to specified event times.
+
+    Outputs:
+    - aligned: dictionary containing:
+        - count: numpy array (units, events, bins) of spike counts
+        - rate: numpy array (units, events, bins) of spike rates
+        - times: list of list of numpy arrays (units, events) of spike times
+        - params: dictionary of parameters used for alignment and binning
+            - bin_size_ms: bin width in milliseconds
+            - time_range: time window around each event in seconds
+            - n_events: number of events
+            - n_timestep: number of bins
+            - event_bin: bin index of the event
+            - units: list of units included
+    """
 
     bin_size = bin_size_ms / 1000.0
     n_bins   = int(np.round((time_range[1] - time_range[0]) / bin_size))
@@ -111,6 +129,15 @@ def get_spikes(spikes, event_times,
             spike_times[u][j] = np.asarray(spike_times[u][j], dtype=float)
 
     spike_rate = spike_count / bin_size
+    if subtract_baseline:
+        # Use pre-event period as baseline (negative times before event at t=0)
+        if time_range[0] < 0:
+            baseline_window = (time_range[0], 0.0)
+        else:
+            # If no pre-event period, use first third of bins as baseline
+            baseline_window = None
+        spike_rate, _ = subtract_baseline_rate(spike_rate, baseline_window=baseline_window, time_range=time_range, bin_size_ms=bin_size_ms)
+
     aligned = {
         "count": spike_count,
         "rate": spike_rate,
@@ -791,6 +818,107 @@ def make_orthogonal(cd_a, cd_b):
     return cd_a_orthogonal
 
 
+def subtract_baseline_rate(spike_matrix, baseline_window=None, time_range=None, bin_size_ms=25):
+    """
+    Subtract baseline firing rate from spike matrix.
+    
+    Parameters:
+    -----------
+    spike_matrix : np.ndarray
+        Spike rate or count matrix of shape (units, events, bins)
+    baseline_window : tuple or None
+        Baseline window specification. Can be:
+        - (start_time, end_time): time range in seconds (requires time_range and bin_size_ms)
+        - None: automatically determined:
+            * If time_range is provided and time_range[0] < 0, uses (time_range[0], 0.0) as baseline
+            * Otherwise, uses first half of bins as baseline
+    time_range : tuple or None
+        (start_time, end_time) in seconds for the full time window.
+        Required if baseline_window is specified in seconds.
+        If baseline_window is None and time_range[0] < 0, automatically uses pre-event period.
+    bin_size_ms : float
+        Bin size in milliseconds. Required if baseline_window is specified in seconds.
+        Default: 25 ms
+    
+    Returns:
+    --------
+    baseline_subtracted : np.ndarray
+        Baseline-subtracted spike matrix, same shape as input
+    baseline_rates : np.ndarray
+        Baseline rates per unit, shape (units,)
+    """
+    spike_matrix = np.asarray(spike_matrix)
+    if spike_matrix.ndim != 3:
+        raise ValueError(f"spike_matrix must be 3D (units, events, bins), got shape {spike_matrix.shape}")
+    
+    n_units, n_events, n_bins = spike_matrix.shape
+    
+    # Determine baseline bin indices
+    if baseline_window is None:
+        # If time_range is provided and has negative start time, use pre-event period
+        if time_range is not None and time_range[0] < 0:
+            baseline_start_s = time_range[0]
+            baseline_end_s = 0.0
+            tr_start_s, tr_end_s = time_range
+            
+            bin_size_s = bin_size_ms / 1000.0
+            # Convert time in seconds to bin index
+            # Bin 0 corresponds to tr_start_s, bin n_bins-1 corresponds to tr_end_s
+            baseline_start_bin = int(np.floor((baseline_start_s - tr_start_s) / bin_size_s))
+            baseline_end_bin = int(np.ceil((baseline_end_s - tr_start_s) / bin_size_s))
+            
+            # Clamp to valid range
+            baseline_start_bin = max(0, min(baseline_start_bin, n_bins - 1))
+            baseline_end_bin = max(1, min(baseline_end_bin, n_bins))
+        else:
+            # Default: use first half of bins
+            baseline_start_bin = 0
+            baseline_end_bin = max(1, n_bins // 2)  # Ensure at least 1 bin
+    elif len(baseline_window) == 2:
+        # Baseline window given as time range in seconds
+        if time_range is None:
+            raise ValueError("time_range must be provided when baseline_window is specified in seconds")
+        baseline_start_s, baseline_end_s = baseline_window
+        tr_start_s, tr_end_s = time_range
+        
+        bin_size_s = bin_size_ms / 1000.0
+        # Convert time in seconds to bin index
+        # Bin 0 corresponds to tr_start_s, bin n_bins-1 corresponds to tr_end_s
+        baseline_start_bin = int(np.floor((baseline_start_s - tr_start_s) / bin_size_s))
+        baseline_end_bin = int(np.ceil((baseline_end_s - tr_start_s) / bin_size_s))
+        
+        # Clamp to valid range
+        baseline_start_bin = max(0, min(baseline_start_bin, n_bins - 1))
+        baseline_end_bin = max(1, min(baseline_end_bin, n_bins))
+    else:
+        raise ValueError("baseline_window must be a tuple of length 2 or None")
+    
+    # Final validation
+    baseline_start_bin = max(0, baseline_start_bin)
+    baseline_end_bin = min(n_bins, baseline_end_bin)
+    
+    if n_bins == 0:
+        raise ValueError(f"Cannot compute baseline: spike_matrix has 0 bins (shape: {spike_matrix.shape})")
+    
+    if baseline_start_bin >= baseline_end_bin:
+        raise ValueError(
+            f"Invalid baseline window: start_bin ({baseline_start_bin}) >= end_bin ({baseline_end_bin}). "
+            f"n_bins={n_bins}, baseline_window={baseline_window}, time_range={time_range},"
+            f"baseline_start_bin={baseline_start_bin}, baseline_end_bin={baseline_end_bin}"
+        )
+    
+    # Calculate baseline rate per unit (mean across baseline bins and events)
+    baseline_bins = spike_matrix[:, :, baseline_start_bin:baseline_end_bin]  # (units, events, baseline_bins)
+    baseline_rate = np.nanmean(baseline_bins, axis=(1, 2))  # (units,) - mean across events and time
+    
+    # Subtract baseline from all bins
+    baseline_subtracted = spike_matrix.copy()
+    for u in range(n_units):
+        baseline_subtracted[u, :, :] -= baseline_rate[u]
+    
+    return baseline_subtracted, baseline_rate
+
+
 def convert_dask_to_numpy(dask_array):
     """
     Convert a Dask array to NumPy array, handling unknown chunk sizes.
@@ -811,3 +939,16 @@ def convert_dask_to_numpy(dask_array):
         return dask_array.compute()
     else:
         return dask_array
+
+
+# Helpers for time indexing
+def parse_time_range(tr_val):
+    if isinstance(tr_val, (list, tuple, np.ndarray)) and len(tr_val) >= 2:
+        return float(tr_val[0]), float(tr_val[1])
+    if isinstance(tr_val, str):
+        s = tr_val.strip().strip('()[]')
+        parts = [p for p in s.replace(',', ' ').split() if p]
+        if len(parts) >= 2:
+            return float(parts[0]), float(parts[1])
+    # Fallback to (-1, 2) if unknown
+    return -1.0, 2.0
