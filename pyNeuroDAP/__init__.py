@@ -17,7 +17,7 @@ __author__ = "Shun Li"
 # Import main functionality from modules
 from .spikes import (
     get_spikes,
-    subtract_baseline_rate,
+    subtract_baseline,
     combine_rates,
     remove_nan_trials,
     get_decoders,
@@ -92,7 +92,7 @@ from .mat import (
 __all__ = [
     # Core spike analysis
     'get_spikes',
-    'subtract_baseline_rate',
+    'subtract_baseline',
     'combine_rates',
     'remove_nan_trials',
     'get_decoders',

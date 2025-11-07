@@ -11,7 +11,7 @@ def get_spikes(spikes, event_times,
                     same_system=True,
                     params=None,
                     include_units=None,
-                    subtract_baseline=False,
+                    subtract_baseline_spikes=False,
                     verbose=False):
 
     """
@@ -129,14 +129,16 @@ def get_spikes(spikes, event_times,
             spike_times[u][j] = np.asarray(spike_times[u][j], dtype=float)
 
     spike_rate = spike_count / bin_size
-    if subtract_baseline:
+    if subtract_baseline_spikes:
         # Use pre-event period as baseline (negative times before event at t=0)
         if time_range[0] < 0:
             baseline_window = (time_range[0], 0.0)
         else:
             # If no pre-event period, use first third of bins as baseline
             baseline_window = None
-        spike_rate, _ = subtract_baseline_rate(spike_rate, baseline_window=baseline_window, time_range=time_range, bin_size_ms=bin_size_ms)
+        # Subtract baseline
+        spike_count, _ = subtract_baseline(spike_count, baseline_window=baseline_window, time_range=time_range, bin_size_ms=bin_size_ms, data_type='count')
+        spike_rate, _ = subtract_baseline(spike_rate, baseline_window=baseline_window, time_range=time_range, bin_size_ms=bin_size_ms, data_type='rate')
 
     aligned = {
         "count": spike_count,
@@ -818,7 +820,7 @@ def make_orthogonal(cd_a, cd_b):
     return cd_a_orthogonal
 
 
-def subtract_baseline_rate(spike_matrix, baseline_window=None, time_range=None, bin_size_ms=25):
+def subtract_baseline(spike_matrix, baseline_window=None, time_range=None, bin_size_ms=25, data_type='rate'):
     """
     Subtract baseline firing rate from spike matrix.
     
@@ -839,6 +841,11 @@ def subtract_baseline_rate(spike_matrix, baseline_window=None, time_range=None, 
     bin_size_ms : float
         Bin size in milliseconds. Required if baseline_window is specified in seconds.
         Default: 25 ms
+    data_type : {'rate', 'count'}
+        Type of data to subtract baseline from. Default: 'rate'
+        - 'rate': spike rate (spikes per second)
+        - 'count': spike count (number of spikes)
+        If 'count', the baseline is subtracted from the spike count, and the result is converted to integer.
     
     Returns:
     --------
@@ -909,14 +916,19 @@ def subtract_baseline_rate(spike_matrix, baseline_window=None, time_range=None, 
     
     # Calculate baseline rate per unit (mean across baseline bins and events)
     baseline_bins = spike_matrix[:, :, baseline_start_bin:baseline_end_bin]  # (units, events, baseline_bins)
-    baseline_rate = np.nanmean(baseline_bins, axis=(1, 2))  # (units,) - mean across events and time
+    baseline_mean = np.nanmean(baseline_bins, axis=(1, 2))  # (units,) - mean across events and time
     
     # Subtract baseline from all bins
     baseline_subtracted = spike_matrix.copy()
     for u in range(n_units):
-        baseline_subtracted[u, :, :] -= baseline_rate[u]
+        baseline_subtracted[u, :, :] -= baseline_mean[u]
+
+    # If spike_matrix is spike counts, make sure it is integer
+    if data_type == 'count':
+        # baseline_subtracted = np.maximum(baseline_subtracted, 0)
+        baseline_subtracted = np.round(baseline_subtracted).astype(int)
     
-    return baseline_subtracted, baseline_rate
+    return baseline_subtracted, baseline_mean
 
 
 def convert_dask_to_numpy(dask_array):
