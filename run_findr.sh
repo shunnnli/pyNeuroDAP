@@ -13,6 +13,9 @@
 #SBATCH --mail-type END,FAIL
 #SBATCH --mail-user shunli@g.harvard.edu
 
+# Command to copy this script to ~/findr
+# rsync -av --progress /Users/shunli/Projects/pyNeuroDAP/run_findr.sh shunnnli@login.rc.fas.harvard.edu:~/findr/
+
 # Configuration
 findr_dir="/n/holylabs/LABS/bsabatini_lab/Users/shunnnli/findr"
 mamba_env="findr"
@@ -34,7 +37,7 @@ mkdir -p "$analysispath"
 
 # Run FINDR
 cd "$findr_dir"
-python main.py --datapath="$datapath" --workdir="$analysispath"
+python ~/findr/main.py --datapath="$datapath" --workdir="$analysispath"
 
 # Move job outputs to experiment directory
 mv $SLURM_JOB_ID.out $analysispath
