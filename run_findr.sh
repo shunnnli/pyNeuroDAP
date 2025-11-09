@@ -39,6 +39,6 @@ mkdir -p "$analysispath"
 cd "$findr_dir"
 python ~/findr/main.py --datapath="$datapath" --workdir="$analysispath"
 
-# Move job outputs to experiment directory
-mv $SLURM_JOB_ID.out $analysispath
-mv $SLURM_JOB_ID.err $analysispath
+# Copy job outputs to experiment directory
+cp ~/findr/$SLURM_JOB_ID.out $analysispath
+cp ~/findr/$SLURM_JOB_ID.err $analysispath
