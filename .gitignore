@@ -184,6 +184,7 @@ cython_debug/
 Rec_*/
 Data/
 Results/
+findr/
 
 # ssm folder
 ssm/
