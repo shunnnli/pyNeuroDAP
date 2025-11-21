@@ -16,15 +16,17 @@
 # Command to copy this script to ~/findr
 # rsync -av --progress /Users/shunli/Projects/pyNeuroDAP/run_findr.sh shunnnli@login.rc.fas.harvard.edu:~/findr/
 
-# Run with: sbatch run_findr.sh
+# Run the job on cluster
+# cd findr
+# sbatch run_findr.sh
 
 # Configuration
 findr_dir="/n/holylabs/LABS/bsabatini_lab/Users/shunnnli/findr"
 mamba_env="findr"
 
 # Set datapath and analysispath (EDIT THIS!!)
-datapath="/n/holylabs/LABS/bsabatini_lab/Users/shunnnli/findr/datasets/250411-Paolo-DCN/findr_dataset.npz"
-analysispath="/n/holylabs/LABS/bsabatini_lab/Users/shunnnli/findr/datasets/250411-Paolo-DCN/findr-results-20251109"
+datapath="/n/holylabs/LABS/bsabatini_lab/Users/shunnnli/findr/datasets/20250622-Data-InsCtx/20250618_M346_4W50_g0_ccm_findr_dataset.npz"
+analysispath="/n/holylabs/LABS/bsabatini_lab/Users/shunnnli/findr/datasets/20250622-Data-InsCtx/findr-results-20251121"
 
 # Load modules
 module load python/3.10.9-fasrc01
