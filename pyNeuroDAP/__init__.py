@@ -46,6 +46,7 @@ from .models import (
 )
 
 from .trials import (
+    get_onset_times,
     get_trial_table,
     get_trial_times,
     get_trial_data
@@ -119,6 +120,7 @@ __all__ = [
     'separate_rslds_tuple',
     
     # Trial management
+    'get_onset_times',
     'get_trial_table',
     'get_trial_times',
     'get_trial_data',

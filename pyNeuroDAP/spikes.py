@@ -45,6 +45,11 @@ def get_spikes(spikes, event_times,
         t_imec = np.asarray(params['sync']['timeImec'][0])  # seconds, monotonic
         t_ni   = np.asarray(params['sync']['timeNI'][0])    # seconds, monotonic
 
+        # Check if t_ni is a number or an array
+        if t_ni.ndim == 0:
+            t_imec = params['sync']['timeImec']
+            t_ni = params['sync']['timeNI']
+
         # If event_times are NI *sample indices*, convert to seconds; otherwise assume seconds
         if np.issubdtype(event_times.dtype, np.integer):
             ev_sec = t_ni[event_times]

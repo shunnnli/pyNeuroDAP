@@ -78,13 +78,9 @@ def convert_params_from_mat(session_mat, exclude_keys=None):
     return params
 
 
-def convert_spikes_from_mat(params, user='shun', 
-    save_path=None, save=True):
+def convert_spikes_from_mat(params, user='shun', save_path=None, save=True):
     """
     Get the good units from a MATLAB file.
-    """
-    
-    """
     Extracts spike and cluster information from a MATLAB session dictionary.
 
     Returns a dictionary with keys for each region (if multiple regions are present), containing:

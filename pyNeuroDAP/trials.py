@@ -2,6 +2,73 @@ import re
 import numpy as np
 import pandas as pd
 
+def get_onset_times(event, fs=10000, min_separation=None, edge='rising', return_time=False):
+    """
+    Extract onset times from a boolean event array.
+    
+    Parameters:
+    -----------
+    event : array-like
+        Boolean array representing the event signal
+    fs : float
+        Sampling frequency in Hz
+    min_separation : float or None, optional
+        Minimum separation between onsets in seconds. If None, extract all edges.
+        Default is None.
+        Unit is second.
+    edge : str, optional
+        Type of edge to detect: 'rising' (False->True) or 'falling' (True->False).
+        Default is 'rising'.
+    return_time : bool, optional
+        If True, return the onset times in seconds.
+        Default is False.
+    
+    Returns:
+    --------
+    onset_times : numpy.ndarray
+        Array of onset times in seconds
+    """
+    if event is None or len(event) == 0:
+        return np.array([])
+    
+    # Convert to boolean if needed
+    bool_arr = np.array(event, dtype=bool)
+    
+    # Find edges based on edge type
+    if edge == 'rising':
+        # Find rising edges: where signal goes from False to True
+        edges = np.diff(bool_arr.astype(int)) == 1
+    elif edge == 'falling':
+        # Find falling edges: where signal goes from True to False
+        edges = np.diff(bool_arr.astype(int)) == -1
+    else:
+        raise ValueError(f"edge must be 'rising' or 'falling', got '{edge}'")
+    
+    # Get indices of edges (add 1 because diff reduces length by 1)
+    edge_indices = np.where(edges)[0] + 1
+    
+    if len(edge_indices) == 0:
+        return np.array([])
+    
+    # Convert sample indices to time in seconds
+    onset_times = edge_indices
+    if return_time:
+        onset_times = onset_times / fs
+    
+    # If no minimum separation specified, return all edges
+    if min_separation is None:
+        return onset_times
+    
+    # Filter to keep only onsets separated by >= min_separation
+    filtered_onsets = [onset_times[0]]  # Always keep the first one
+    
+    for i in range(1, len(onset_times)):
+        # Only keep if separated by at least min_separation from the last kept onset
+        if onset_times[i] - filtered_onsets[-1] >= min_separation:
+            filtered_onsets.append(onset_times[i])
+    
+    return np.array(filtered_onsets)
+
 
 def extract_lick_columns(df, side):
     """

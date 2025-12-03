@@ -70,6 +70,7 @@ def convert_dict_to_list(data):
         # Fallback: try to convert to list
         return list(data)
 
+
 def plot_raster(data, x=None, 
                 color='blue', dot_size=15, alpha=0.5,
                 ax=None):
@@ -333,7 +334,7 @@ def plot_psth(spike_data, time_window=None, bin_size_ms=50, ax=None,
     
     Parameters:
     - spike_data: array-like, spike counts [neurons, trials, time_bins]
-    - time_window: tuple, (start_ms, end_ms) for x-axis
+    - time_window: tuple, (start, end) in seconds for x-axis
     - bin_size_ms: float, bin size in milliseconds
     - ax: matplotlib axis, axis to plot on
     - color: str or tuple, color for the plot
@@ -357,9 +358,9 @@ def plot_psth(spike_data, time_window=None, bin_size_ms=50, ax=None,
     
     # Create time axis
     if time_window is None:
-        time_window = (0, len(mean_rate) * bin_size_ms)
+        time_window = (0, len(mean_rate) * bin_size_ms / 1000)
     
-    time_axis = np.arange(time_window[0], time_window[1], bin_size_ms)
+    time_axis = np.arange(time_window[0], time_window[1], bin_size_ms / 1000)
     if len(time_axis) > len(mean_rate):
         time_axis = time_axis[:len(mean_rate)]
     elif len(time_axis) < len(mean_rate):
