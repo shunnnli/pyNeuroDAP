@@ -4,6 +4,8 @@ from matplotlib.gridspec import GridSpec
 import pickle
 from matplotlib import cm
 import matplotlib.colors as mcolors
+import os
+from .spikes import get_time_axis, get_spikes
 
 def plot_sem(y, x=None, 
             label=None, color=None, ax=None, alpha=None, 
@@ -380,6 +382,81 @@ def plot_psth(spike_data, time_window=None, bin_size_ms=50, ax=None,
     ax.grid(True, alpha=0.3)
     
     return ax
+
+
+def plot_all_units(spikes, event, time_range, plot_style='raster',
+                bin_size_ms = 5, good_units = None, good_unit_ids = None,
+                params = None, same_system = False,
+                save_folder = None, figsize=(15, 3),
+                event_color='tab:red', event_duration=0.5, event_label='Event', event_alpha=0.25, event_onset=0,
+                spike_color='tab:blue',):
+
+    if spikes or event or time_range is None:
+        raise ValueError('spikes, event, and time_range must be provided')
+
+    # Plot PSTH aligned to event
+    xaxis = get_time_axis(time_range, bin_size_ms=bin_size_ms)
+
+    print('Aligning spikes to onsets...')
+    aligned = get_spikes(spikes, event, time_range, 
+                        include_units=good_units, 
+                        same_system=same_system, 
+                        params=params, 
+                        bin_size_ms=bin_size_ms)
+    print(f'Finished: aligned {len(event)} events')
+    print(f'Shape: {aligned["rate"].shape} (units, events, bins)')
+
+    # Get spike rate data: shape (units, events, bins)
+    spike_rates = aligned['rate']  # Shape: (n_units, n_events, n_bins)
+    spike_times = aligned['times']
+    n_units = spike_rates.shape[0]
+
+    # Get unit IDs for labeling - use good_unit_ids if provided, otherwise use units from aligned params
+    if good_unit_ids is not None:
+        unit_ids = good_unit_ids
+    elif good_units is not None:
+        unit_ids = good_units
+    else:
+        unit_ids = aligned['params']['units']
+
+    # Calculate number of rows and columns for subplots
+    n_cols = 5
+    n_rows = int(np.ceil(n_units / n_cols))
+    # Create figure with subplots
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(figsize[0], figsize[1]*n_rows))
+    axes = axes.flatten() if n_units > 1 else [axes] if n_rows == 1 and n_cols == 1 else axes.flatten()
+
+    # Plot PSTH for each unit
+    for unit_idx in range(n_units):
+        ax = axes[unit_idx]
+        unit_id = unit_ids[unit_idx]
+
+        if plot_style == 'raster':
+            plot_raster(spike_times[unit_idx], x=xaxis, ax=ax, color=spike_color)
+        elif plot_style == 'trace':
+            plot_psth(spike_rates[unit_idx], time_window=(event_onset, event_onset + event_duration), bin_size_ms=bin_size_ms, ax=ax, color=spike_color)
+        else:
+            raise ValueError(f'Invalid plot style: {plot_style}')
+        
+        # Labels and formatting
+        ax.axvspan(event_onset, event_onset + event_duration, facecolor=event_color, alpha=event_alpha, edgecolor='none')  # transparent red shade from 0 to 10 ms, no edge
+        ax.set_xlabel('Time (s)', fontsize=9)
+        ax.set_ylabel('Firing Rate (Hz)', fontsize=9)
+        ax.set_title(f'Unit {unit_id}', fontsize=10)
+        ax.tick_params(labelsize=9)
+
+    # Hide unused subplots
+    for idx in range(n_units, len(axes)):
+        axes[idx].axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+    # Save figure
+    if save_folder is not None:
+        fig.savefig(os.path.join(save_folder, f'PSTH_all_units_{event_label}.png'), dpi=300, bbox_inches='tight')
+        fig.savefig(os.path.join(save_folder, f'PSTH_all_units_{event_label}.pdf'), dpi=300, bbox_inches='tight')
+        print(f'Saved PSTH plots for {n_units} units aligned to {event_label}')
 
 
 def plot_tuning_curve(responses, conditions, ax=None, color='blue', 

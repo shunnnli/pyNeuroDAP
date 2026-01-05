@@ -72,7 +72,8 @@ from .plots import (
     plot_coding_directions,
     plot_sem,
     convert_dict_to_list,
-    plot_pca
+    plot_pca,
+    plot_all_units
 )
 
 from .gui import (
@@ -145,6 +146,7 @@ __all__ = [
     'plot_sem',
     'convert_dict_to_list',
     'plot_pca',
+    'plot_all_units',
     
     # GUI utilities
     'create_session_gui',
