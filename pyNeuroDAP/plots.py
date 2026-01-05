@@ -335,51 +335,58 @@ def plot_psth(spike_data, time_window=None, bin_size_ms=50, ax=None,
     Plot Peri-Stimulus Time Histogram (PSTH)
     
     Parameters:
-    - spike_data: array-like, spike counts [neurons, trials, time_bins]
+    - spike_data: array-like, spike counts [neurons, trials, time_bins] or [trials, time_bins] or [time_bins]
     - time_window: tuple, (start, end) in seconds for x-axis
     - bin_size_ms: float, bin size in milliseconds
     - ax: matplotlib axis, axis to plot on
     - color: str or tuple, color for the plot
     - label: str, label for the plot
-    - alpha: float, transparency
+    - alpha: float, transparency (applied to line, SEM uses fixed alpha=0.2)
     - show_sem: bool, whether to show standard error of mean
     """
     if ax is None:
         ax = plt.gca()
     
-    # Average across neurons and trials
+    spike_data = np.asarray(spike_data)
+    
+    # Prepare data for plot_sem (needs shape [trials, time_bins])
     if spike_data.ndim == 3:
-        mean_rate = np.nanmean(spike_data, axis=(0, 1))  # Average across neurons and trials
-        sem_rate = np.nanstd(np.nanmean(spike_data, axis=0), axis=0) / np.sqrt(spike_data.shape[1])
+        # Average across neurons first: [neurons, trials, time_bins] -> [trials, time_bins]
+        data_for_sem = np.nanmean(spike_data, axis=0)
     elif spike_data.ndim == 2:
-        mean_rate = np.nanmean(spike_data, axis=0)  # Average across trials
-        sem_rate = np.nanstd(spike_data, axis=0) / np.sqrt(spike_data.shape[0])
+        # Already in correct format: [trials, time_bins]
+        data_for_sem = spike_data
     else:
+        # 1D data: [time_bins] - can't use plot_sem, plot directly
         mean_rate = spike_data
-        sem_rate = np.zeros_like(mean_rate)
+        # Create time axis
+        if time_window is None:
+            time_window = (0, len(mean_rate) * bin_size_ms / 1000)
+        
+        time_axis = np.arange(time_window[0], time_window[1], bin_size_ms / 1000)
+        if len(time_axis) > len(mean_rate):
+            time_axis = time_axis[:len(mean_rate)]
+        elif len(time_axis) < len(mean_rate):
+            mean_rate = mean_rate[:len(time_axis)]
+        
+        ax.plot(time_axis, mean_rate, color=color, label=label, alpha=alpha, linewidth=2)
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Firing Rate (Hz)')
+        return ax
     
     # Create time axis
+    n_timepoints = data_for_sem.shape[1]
     if time_window is None:
-        time_window = (0, len(mean_rate) * bin_size_ms / 1000)
+        time_window = (0, n_timepoints * bin_size_ms / 1000)
     
-    time_axis = np.arange(time_window[0], time_window[1], bin_size_ms / 1000)
-    if len(time_axis) > len(mean_rate):
-        time_axis = time_axis[:len(mean_rate)]
-    elif len(time_axis) < len(mean_rate):
-        mean_rate = mean_rate[:len(time_axis)]
-        sem_rate = sem_rate[:len(time_axis)]
+    time_axis = np.linspace(time_window[0], time_window[1], n_timepoints)
     
-    # Plot
-    ax.plot(time_axis, mean_rate, color=color, label=label, alpha=alpha, linewidth=2)
+    # Use plot_sem to handle mean and SEM calculation and plotting
+    plot_sem(data_for_sem, x=time_axis, label=label, color=color, ax=ax, 
+             alpha=alpha, fill=show_sem, plot_individual=False)
     
-    if show_sem and not np.all(sem_rate == 0):
-        ax.fill_between(time_axis, mean_rate - sem_rate, mean_rate + sem_rate, 
-                       color=color, alpha=0.3)
-    
-    ax.set_xlabel('Time (ms)')
+    ax.set_xlabel('Time (s)')
     ax.set_ylabel('Firing Rate (Hz)')
-    ax.set_title('Peri-Stimulus Time Histogram')
-    ax.grid(True, alpha=0.3)
     
     return ax
 
@@ -387,11 +394,11 @@ def plot_psth(spike_data, time_window=None, bin_size_ms=50, ax=None,
 def plot_all_units(spikes, event, time_range, plot_style='raster',
                 bin_size_ms = 5, good_units = None, good_unit_ids = None,
                 params = None, same_system = False,
-                save_folder = None, figsize=(15, 3),
+                save_figure = False, save_folder = None, figsize=(15, 3),
                 event_color='tab:red', event_duration=0.5, event_label='Event', event_alpha=0.25, event_onset=0,
                 spike_color='tab:blue',):
 
-    if spikes or event or time_range is None:
+    if any(x is None for x in [spikes, event, time_range]):
         raise ValueError('spikes, event, and time_range must be provided')
 
     # Plot PSTH aligned to event
@@ -431,17 +438,20 @@ def plot_all_units(spikes, event, time_range, plot_style='raster',
         ax = axes[unit_idx]
         unit_id = unit_ids[unit_idx]
 
-        if plot_style == 'raster':
+        if plot_style == 'raster' or plot_style == 'scatter':
             plot_raster(spike_times[unit_idx], x=xaxis, ax=ax, color=spike_color)
-        elif plot_style == 'trace':
-            plot_psth(spike_rates[unit_idx], time_window=(event_onset, event_onset + event_duration), bin_size_ms=bin_size_ms, ax=ax, color=spike_color)
+        elif plot_style == 'trace' or plot_style == 'psth':
+            plot_psth(spike_rates[unit_idx], time_window=time_range, bin_size_ms=bin_size_ms, ax=ax, color=spike_color)
         else:
             raise ValueError(f'Invalid plot style: {plot_style}')
         
         # Labels and formatting
         ax.axvspan(event_onset, event_onset + event_duration, facecolor=event_color, alpha=event_alpha, edgecolor='none')  # transparent red shade from 0 to 10 ms, no edge
         ax.set_xlabel('Time (s)', fontsize=9)
-        ax.set_ylabel('Firing Rate (Hz)', fontsize=9)
+        if plot_style == 'trace' or plot_style == 'psth':
+            ax.set_ylabel('Firing rate (Hz)', fontsize=9)
+        else:
+            ax.set_ylabel('Spike count', fontsize=9)
         ax.set_title(f'Unit {unit_id}', fontsize=10)
         ax.tick_params(labelsize=9)
 
@@ -453,9 +463,9 @@ def plot_all_units(spikes, event, time_range, plot_style='raster',
     plt.show()
 
     # Save figure
-    if save_folder is not None:
-        fig.savefig(os.path.join(save_folder, f'PSTH_all_units_{event_label}.png'), dpi=300, bbox_inches='tight')
-        fig.savefig(os.path.join(save_folder, f'PSTH_all_units_{event_label}.pdf'), dpi=300, bbox_inches='tight')
+    if save_figure is True and save_folder is not None:
+        fig.savefig(os.path.join(save_folder, f'PSTH_{plot_style}_{event_label}.png'), dpi=300, bbox_inches='tight')
+        fig.savefig(os.path.join(save_folder, f'PSTH_{plot_style}_{event_label}.pdf'), dpi=300, bbox_inches='tight')
         print(f'Saved PSTH plots for {n_units} units aligned to {event_label}')
 
 
