@@ -58,9 +58,18 @@ def get_spikes(spikes, event_times,
 
         # Map seconds → imec sample index (nearest)
         # searchsorted is O(log N) vs argmin O(N)
+        # Ensure t_imec is sorted for searchsorted to work correctly
+        if not np.all(np.diff(t_imec) >= 0):
+            raise ValueError("timeImec must be monotonically increasing for searchsorted")
+        
         centers = np.searchsorted(t_imec, ev_sec, side='left')
         # clamp to valid range
         centers = np.clip(centers, 0, len(t_imec) - 1).astype(np.int64)
+        
+        # Check if all centers are the same (would cause duplicate spikes across events)
+        if len(np.unique(centers)) == 1 and len(centers) > 1:
+            warnings.warn(f"All {len(centers)} events map to the same imec sample index {centers[0]}. "
+                         f"Check event_times and sync parameters.")
     else:
         # same system: event_times given in seconds
         centers = np.round(event_times * ap_fs).astype(np.int64)
@@ -121,7 +130,10 @@ def get_spikes(spikes, event_times,
         bins = bins[keep]; ui = ui[keep]; s = s[keep]
 
         # accumulate counts
-        np.add.at(spike_count[:, j, :], (ui, bins), 1)
+        # Index all 3 dimensions: (units, events, bins)
+        j_indices = np.full(len(ui), j, dtype=int)
+        np.add.at(spike_count, (ui, j_indices, bins), 1)
+        # Original code: np.add.at(spike_count[:, j, :], (ui, bins), 1)
 
         # save relative spike times (time zero = event center)
         rel_t = (s - centers[j]) / float(ap_fs)

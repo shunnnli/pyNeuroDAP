@@ -50,24 +50,25 @@ def get_onset_times(event, fs=10000, min_separation=None, edge='rising', return_
     if len(edge_indices) == 0:
         return np.array([])
     
-    # Convert sample indices to time in seconds
-    onset_times = edge_indices
-    if return_time:
-        onset_times = onset_times / fs
-    
     # If no minimum separation specified, return all edges
     if min_separation is None:
-        return onset_times
+        if return_time:
+            return edge_indices / fs
+        else:
+            return edge_indices
     
     # Filter to keep only onsets separated by >= min_separation
-    filtered_onsets = [onset_times[0]]  # Always keep the first one
+    filtered_onsets = [edge_indices[0]]  # Always keep the first one
     
-    for i in range(1, len(onset_times)):
+    for i in range(1, len(edge_indices)):
         # Only keep if separated by at least min_separation from the last kept onset
-        if onset_times[i] - filtered_onsets[-1] >= min_separation:
-            filtered_onsets.append(onset_times[i])
+        if edge_indices[i] - filtered_onsets[-1] >= min_separation*fs:
+            filtered_onsets.append(edge_indices[i])
     
-    return np.array(filtered_onsets)
+    if return_time:
+        return np.array(filtered_onsets) / fs
+    else:
+        return np.array(filtered_onsets)
 
 
 def extract_lick_columns(df, side):
