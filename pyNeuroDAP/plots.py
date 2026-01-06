@@ -155,7 +155,6 @@ def plot_pca(pc_scores, color=None, ax=None, label=None,
             ax.scatter(pc_scores[idx, 0], pc_scores[idx, 1], 
                        marker=marker, color=color, s=marker_size, zorder=10)
         
-
     
 def get_traces(data, event, pre_steps, post_steps):
     data = np.asarray(data)
@@ -417,6 +416,10 @@ def plot_all_units(spikes, event, time_range, plot_style='raster',
     spike_rates = aligned['rate']  # Shape: (n_units, n_events, n_bins)
     spike_times = aligned['times']
     n_units = spike_rates.shape[0]
+    # Return if no units or no events
+    if n_units == 0 or len(event) == 0:
+        print('No units or events to plot')
+        return
 
     # Get unit IDs for labeling - use good_unit_ids if provided, otherwise use units from aligned params
     if good_unit_ids is not None:

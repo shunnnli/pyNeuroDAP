@@ -172,153 +172,6 @@ def get_spikes(spikes, event_times,
     }
     return aligned
 
-def get_spikes_slow(spikes, event_times, 
-               time_range=(-1, 2),  # in seconds: (t_start, t_end), e.g. (-0.5, 1.0)
-               bin_size_ms=25,       # bin width in milliseconds (default 5 ms)
-               ap_fs=40000,         # fs of the ephys recording system
-               same_system=True,
-               params=None,
-               include_units=None,
-               verbose=False):       # e.g. {'clusters': [0,2,5]}
-
-    """
-    Extracts and aligns spike times from a list of units to specified event times.
-
-    Parameters:
-        spikes : np.ndarray
-            Array of shape (n_spikes, 3), where each row is (sample_index, unit_index, segment_index).
-        event_times : array-like
-            List or array of event times (in seconds) to which spikes will be aligned.
-        time_range : tuple
-            Time window around each event, in seconds (start, end), e.g., (-0.5, 1.0).
-        bin_size_ms : float, optional
-            Bin width in milliseconds (default: 10 ms).
-        ap_fs : float, optional
-            Sampling rate of the ephys recording system (default: 40000).
-        same_system : bool, optional
-            If False, uses synchronization parameters in 'params' to align times (default: True).
-        params : dict, optional
-            Synchronization parameters, required if same_system is False.
-        include_units : array-like, optional
-            List of unit indices to include. If None, includes all units found in 'spikes'.
-        verbose : bool, optional
-            If True, displays a progress bar.
-
-    Returns:
-        spike_count : np.ndarray
-            Array of shape (n_units, n_events, n_bins) with spike counts per bin.
-        spike_times : list of list of np.ndarray
-            Nested list: spike_times[unit][event] gives array of spike times (in seconds) for that unit/event.
-        spike_params : dict
-            Dictionary of parameters used for alignment and binning.
-    """
-
-    # convert bin size to seconds
-    bin_size = bin_size_ms / 1000.0
-
-    # 1) basic checks
-    n_bins = int(np.round((time_range[1] - time_range[0]) / bin_size))
-    if abs((time_range[0] / bin_size) % 1) > 1e-6:
-        warnings.warn("time_range not integer‐multiple of bin_size; edges may misalign.")
-
-    # 2) unpack params
-    if not same_system:
-        if params is None:
-            warnings.warn("Please provide sync params if same_system==False")
-            return [],[],[]
-        else:
-            t_imec  = np.asarray(params['sync']['timeImec'][0])
-            t_ni    = np.asarray(params['sync']['timeNI'][0])
-
-    # 3) determine units
-    all_units = np.unique(spikes[:,1])
-    include_units = include_units if include_units is not None else all_units
-    unit2idx     = {u: i for i, u in enumerate(include_units)}
-
-    # prepare outputs
-    n_events = len(event_times)
-    event_bin = int(np.round(abs(time_range[0]) / bin_size))
-    spike_count = np.zeros((len(include_units), n_events, n_bins), dtype=float)
-    spike_times = [[[] for _ in range(n_events)] for _ in range(len(include_units))]
-
-    spike_params = {
-        'bin_size_ms': bin_size_ms,
-        'time_range': time_range,
-        'n_events': n_events,
-        'n_timestep': n_bins,
-        'event_bin': event_bin,
-        'units': include_units
-    }
-
-    # 4) loop events with tqdm progress bar
-    if verbose:
-        iterator = tqdm(event_times, desc="Aligning spikes to events", leave=True)
-    else:
-        iterator = event_times
-    
-    for i_ev, ev in enumerate(iterator):
-        if np.isnan(ev):
-            # turn the corresponding row into all nan and continue
-            for u in range(len(include_units)):
-                spike_count[u, i_ev, :] = np.nan
-                spike_times[u][i_ev] = np.array([])
-            continue
-
-        if not same_system:
-            # find corresponding imec time for this NI‐event
-            ni_time = t_ni[ev]
-            imec_idx = np.argmin(np.abs(t_imec - ni_time))
-
-            # window edges in imec‐samples
-            start_idx = int(np.round(imec_idx + ap_fs * time_range[0]))
-            end_idx   = int(np.round(imec_idx + ap_fs * time_range[1]))
-
-        else:
-            imec_idx = ev * ap_fs
-            start_idx = int(np.round(imec_idx + ap_fs * time_range[0]))
-            end_idx   = int(np.round(imec_idx + ap_fs * time_range[1]))
-
-        # pick spikes in window
-        mask_time = (spikes[:, 0] > start_idx) & (spikes[:, 0] <= end_idx)
-        mask_units = np.isin(spikes[:, 1], include_units)
-        mask = mask_time & mask_units
-        spikes_window = spikes[mask]
-
-        # compute bin indices (samples → bins)
-        rel_samples = spikes_window[:, 0] - start_idx
-        # samples per bin = bin_size (s) * ap_fs (Hz) → convert to int bins
-        samples_per_bin = bin_size * ap_fs
-        bin_indices = np.floor(rel_samples / samples_per_bin).astype(int)
-
-        # accumulate counts
-        for (sample, unit, _segment), b in zip(spikes_window, bin_indices):
-            if 0 <= b < n_bins:
-                cl_idx = unit2idx[unit]
-                spike_count[cl_idx, i_ev, b] += 1
-
-                event_bin = start_idx - time_range[0] * ap_fs
-                rel_time_s = (sample - event_bin) / ap_fs
-                spike_times[cl_idx][i_ev].append(rel_time_s)
-
-    # 5) convert to rate
-    spike_rate = spike_count / bin_size
-
-
-    # 6）convert each inner list to 1d array
-    for u in range(len(include_units)):
-        for t in range(n_events):
-            spike_times[u][t] = np.array(spike_times[u][t])
-
-    # 6) return a result dictionary
-    aligned = {
-        'count': spike_count,
-        'rate': spike_rate,
-        'times': spike_times,
-        'params': spike_params
-    }
-
-    return aligned
-
 
 def combine_rates(data=None, key=None, rate_list=None, axis=1, chunks=None, target_time_chunk=None):
     """
@@ -981,3 +834,153 @@ def parse_time_range(tr_val):
             return float(parts[0]), float(parts[1])
     # Fallback to (-1, 2) if unknown
     return -1.0, 2.0
+
+
+
+
+# def get_spikes_slow(spikes, event_times, 
+#                time_range=(-1, 2),  # in seconds: (t_start, t_end), e.g. (-0.5, 1.0)
+#                bin_size_ms=25,       # bin width in milliseconds (default 5 ms)
+#                ap_fs=40000,         # fs of the ephys recording system
+#                same_system=True,
+#                params=None,
+#                include_units=None,
+#                verbose=False):       # e.g. {'clusters': [0,2,5]}
+
+#     """
+#     Extracts and aligns spike times from a list of units to specified event times.
+
+#     Parameters:
+#         spikes : np.ndarray
+#             Array of shape (n_spikes, 3), where each row is (sample_index, unit_index, segment_index).
+#         event_times : array-like
+#             List or array of event times (in seconds) to which spikes will be aligned.
+#         time_range : tuple
+#             Time window around each event, in seconds (start, end), e.g., (-0.5, 1.0).
+#         bin_size_ms : float, optional
+#             Bin width in milliseconds (default: 10 ms).
+#         ap_fs : float, optional
+#             Sampling rate of the ephys recording system (default: 40000).
+#         same_system : bool, optional
+#             If False, uses synchronization parameters in 'params' to align times (default: True).
+#         params : dict, optional
+#             Synchronization parameters, required if same_system is False.
+#         include_units : array-like, optional
+#             List of unit indices to include. If None, includes all units found in 'spikes'.
+#         verbose : bool, optional
+#             If True, displays a progress bar.
+
+#     Returns:
+#         spike_count : np.ndarray
+#             Array of shape (n_units, n_events, n_bins) with spike counts per bin.
+#         spike_times : list of list of np.ndarray
+#             Nested list: spike_times[unit][event] gives array of spike times (in seconds) for that unit/event.
+#         spike_params : dict
+#             Dictionary of parameters used for alignment and binning.
+#     """
+
+#     # convert bin size to seconds
+#     bin_size = bin_size_ms / 1000.0
+
+#     # 1) basic checks
+#     n_bins = int(np.round((time_range[1] - time_range[0]) / bin_size))
+#     if abs((time_range[0] / bin_size) % 1) > 1e-6:
+#         warnings.warn("time_range not integer‐multiple of bin_size; edges may misalign.")
+
+#     # 2) unpack params
+#     if not same_system:
+#         if params is None:
+#             warnings.warn("Please provide sync params if same_system==False")
+#             return [],[],[]
+#         else:
+#             t_imec  = np.asarray(params['sync']['timeImec'][0])
+#             t_ni    = np.asarray(params['sync']['timeNI'][0])
+
+#     # 3) determine units
+#     all_units = np.unique(spikes[:,1])
+#     include_units = include_units if include_units is not None else all_units
+#     unit2idx     = {u: i for i, u in enumerate(include_units)}
+
+#     # prepare outputs
+#     n_events = len(event_times)
+#     event_bin = int(np.round(abs(time_range[0]) / bin_size))
+#     spike_count = np.zeros((len(include_units), n_events, n_bins), dtype=float)
+#     spike_times = [[[] for _ in range(n_events)] for _ in range(len(include_units))]
+
+#     spike_params = {
+#         'bin_size_ms': bin_size_ms,
+#         'time_range': time_range,
+#         'n_events': n_events,
+#         'n_timestep': n_bins,
+#         'event_bin': event_bin,
+#         'units': include_units
+#     }
+
+#     # 4) loop events with tqdm progress bar
+#     if verbose:
+#         iterator = tqdm(event_times, desc="Aligning spikes to events", leave=True)
+#     else:
+#         iterator = event_times
+    
+#     for i_ev, ev in enumerate(iterator):
+#         if np.isnan(ev):
+#             # turn the corresponding row into all nan and continue
+#             for u in range(len(include_units)):
+#                 spike_count[u, i_ev, :] = np.nan
+#                 spike_times[u][i_ev] = np.array([])
+#             continue
+
+#         if not same_system:
+#             # find corresponding imec time for this NI‐event
+#             ni_time = t_ni[ev]
+#             imec_idx = np.argmin(np.abs(t_imec - ni_time))
+
+#             # window edges in imec‐samples
+#             start_idx = int(np.round(imec_idx + ap_fs * time_range[0]))
+#             end_idx   = int(np.round(imec_idx + ap_fs * time_range[1]))
+
+#         else:
+#             imec_idx = ev * ap_fs
+#             start_idx = int(np.round(imec_idx + ap_fs * time_range[0]))
+#             end_idx   = int(np.round(imec_idx + ap_fs * time_range[1]))
+
+#         # pick spikes in window
+#         mask_time = (spikes[:, 0] > start_idx) & (spikes[:, 0] <= end_idx)
+#         mask_units = np.isin(spikes[:, 1], include_units)
+#         mask = mask_time & mask_units
+#         spikes_window = spikes[mask]
+
+#         # compute bin indices (samples → bins)
+#         rel_samples = spikes_window[:, 0] - start_idx
+#         # samples per bin = bin_size (s) * ap_fs (Hz) → convert to int bins
+#         samples_per_bin = bin_size * ap_fs
+#         bin_indices = np.floor(rel_samples / samples_per_bin).astype(int)
+
+#         # accumulate counts
+#         for (sample, unit, _segment), b in zip(spikes_window, bin_indices):
+#             if 0 <= b < n_bins:
+#                 cl_idx = unit2idx[unit]
+#                 spike_count[cl_idx, i_ev, b] += 1
+
+#                 event_bin = start_idx - time_range[0] * ap_fs
+#                 rel_time_s = (sample - event_bin) / ap_fs
+#                 spike_times[cl_idx][i_ev].append(rel_time_s)
+
+#     # 5) convert to rate
+#     spike_rate = spike_count / bin_size
+
+
+#     # 6）convert each inner list to 1d array
+#     for u in range(len(include_units)):
+#         for t in range(n_events):
+#             spike_times[u][t] = np.array(spike_times[u][t])
+
+#     # 6) return a result dictionary
+#     aligned = {
+#         'count': spike_count,
+#         'rate': spike_rate,
+#         'times': spike_times,
+#         'params': spike_params
+#     }
+
+#     return aligned
