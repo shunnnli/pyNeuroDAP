@@ -836,7 +836,201 @@ def parse_time_range(tr_val):
     return -1.0, 2.0
 
 
+def _as_float_scalar(x):
+    """Handle numpy scalars/0-d arrays cleanly."""
+    return float(np.asarray(x).reshape(()))
 
+
+def _pick_time(params, system: str):
+    s = system.lower()
+    sync = params["sync"]
+
+    if s == "ni":
+        return np.asarray(sync["timeNI"], float)
+    if s in ("lj", "labjack", "photometry"):
+        return np.asarray(sync["timePhotometry"], float)
+    if s in ("cam", "camera") or ("cam" in s):
+        return np.asarray(sync["timeCamera"], float)
+    if s == "imec":
+        return np.asarray(sync["timeImec"], float)
+    if s == "lfp":
+        return np.asarray(sync["timeLFP"], float)
+
+    raise ValueError(f"Unknown system: {system!r}")
+
+
+def _infer_fs_from_params(params, signal_system: str):
+    s = signal_system.lower()
+    sync = params["sync"]
+
+    if s == "lfp":
+        return _as_float_scalar(sync.get("lfpFs", 1250.0))
+    if s == "imec":
+        return _as_float_scalar(sync.get("apFs", 30000.0))
+    if s == "ni":
+        return _as_float_scalar(sync.get("behaviorFs", 10000.0))
+    if s in ("lj", "labjack", "photometry"):
+        return _as_float_scalar(sync.get("photometryFs", 50.0))
+    if s in ("cam", "camera") or ("cam" in s):
+        return _as_float_scalar(sync.get("camFs", 50.0))
+
+    raise ValueError(f"Cannot infer signal_fs for signal_system={signal_system!r}")
+
+
+def nearest_index(time_target, time_query):
+    """
+    Nearest index in a monotonic increasing time_target for each value in time_query,
+    using searchsorted (fast).
+    """
+    t = np.asarray(time_target, float)
+    q = np.asarray(time_query, float)
+
+    if np.any(np.diff(t) < 0):
+        raise ValueError("timeTarget must be monotonically increasing for searchsorted")
+
+    j = np.searchsorted(t, q, side="left")
+    j = np.clip(j, 0, t.size - 1)
+
+    j0 = np.clip(j - 1, 0, t.size - 1)
+    choose_left = np.abs(t[j0] - q) <= np.abs(t[j] - q)
+    return np.where(choose_left, j0, j).astype(np.int64)
+
+
+def get_traces(
+    data,
+    event,
+    *,
+    time_range=(-1.0, 2.0),          # seconds (used only if pre/post are both 0)
+    pre_steps=0,
+    post_steps=0,
+    signal_fs=None,                  # Hz; can be inferred from params when time_range mode
+    same_system=True,
+    params=None,
+    event_system="ni",
+    signal_system="imec",
+    fill_value=np.nan,
+    rmmissing=False,
+    return_timestamp=True,
+):
+    """
+    Fast window extraction around events.
+
+    Modes:
+      A) Sample-window mode (pre_steps/post_steps): if pre_steps or post_steps != 0
+         - requires same_system=True
+         - does NOT require signal_fs/time_range/params
+         - event must be indices (int) OR digital vector length T
+
+      B) Time-window mode (time_range): used when pre_steps==post_steps==0
+         - window derived from time_range and signal_fs (inferred from params if needed)
+         - if same_system=False, event->signal mapping uses searchsorted on sync time arrays
+
+    data: (T,) or (T,C)
+    event:
+      same_system=True:
+        * digital vector (len==T) OR indices (int) OR seconds (float; requires signal_fs)
+      same_system=False:
+        * digital vector (len==len(timeRef)) OR indices in event_system OR sync-axis seconds
+    """
+    x = np.asarray(data)
+    T = x.shape[0]
+    event = np.asarray(event)
+
+    # ----------------------------
+    # Choose window construction
+    # ----------------------------
+    steps_mode = (pre_steps != 0) or (post_steps != 0)
+
+    if steps_mode:
+        if not same_system:
+            raise ValueError("If pre_steps/post_steps are used, same_system must be True.")
+
+        offsets = np.arange(-int(pre_steps), int(post_steps) + 1, dtype=np.int64)
+        if return_timestamp:
+            # In steps-mode, timestamp is in samples (no Fs required).
+            timestamp = offsets.astype(float)
+    else:
+        # time_range mode
+        if time_range is None:
+            raise ValueError("time_range must be provided when pre_steps==post_steps==0")
+
+        if signal_fs is None:
+            if params is None:
+                raise ValueError("signal_fs is required unless params is provided to infer it.")
+            signal_fs = _infer_fs_from_params(params, signal_system)
+
+        signal_fs = float(signal_fs)
+        t0, t1 = float(time_range[0]), float(time_range[1])
+        off0 = int(np.round(t0 * signal_fs))
+        off1 = int(np.round(t1 * signal_fs))
+        offsets = np.arange(off0, off1 + 1, dtype=np.int64)
+        if return_timestamp:
+            timestamp = offsets.astype(float) / signal_fs
+
+    W = offsets.size
+
+    # ----------------------------
+    # Compute centers (indices in signal sample space)
+    # ----------------------------
+    if same_system:
+        # event can be digital vector, indices, or seconds
+        if event.ndim == 1 and event.size == T and np.issubdtype(event.dtype, np.number):
+            ev = event.astype(np.int8)
+            if np.all((ev == 0) | (ev == 1)):
+                centers = np.where(np.diff(ev) == 1)[0] + 1
+            else:
+                if steps_mode:
+                    raise ValueError(
+                        "In pre/post step mode, event must be indices or digital vector (not seconds)."
+                    )
+                centers = np.round(event.astype(float) * signal_fs).astype(np.int64)
+        elif np.issubdtype(event.dtype, np.integer):
+            centers = event.astype(np.int64)
+        else:
+            if steps_mode:
+                raise ValueError(
+                    "In pre/post step mode, event must be indices or digital vector (not seconds)."
+                )
+            centers = np.round(event.astype(float) * signal_fs).astype(np.int64)
+
+    else:
+        if params is None or "sync" not in params:
+            raise ValueError("params['sync'] is required when same_system=False")
+
+        time_ref = _pick_time(params, event_system)
+        time_tgt = _pick_time(params, signal_system)
+
+        # get event times on sync axis (seconds)
+        if event.ndim == 1 and event.size == time_ref.size:
+            ev = event.astype(np.int8)
+            event_idx = np.where(np.diff(ev) == 1)[0] + 1
+            ev_sync = time_ref[event_idx]
+        elif np.issubdtype(event.dtype, np.integer):
+            ev_sync = time_ref[event.astype(np.int64)]
+        else:
+            ev_sync = event.astype(float)
+
+        centers = nearest_index(time_tgt, ev_sync)
+
+    centers = np.asarray(centers, dtype=np.int64)
+
+    # ----------------------------
+    # Vectorized gather
+    # ----------------------------
+    idx = centers[:, None] + offsets[None, :]     # (N, W)
+    valid = (idx >= 0) & (idx < T)
+
+    out_shape = (centers.size, W) + x.shape[1:]
+    out_dtype = float if (isinstance(fill_value, float) and np.isnan(fill_value)) else x.dtype
+    out = np.full(out_shape, fill_value, dtype=out_dtype)
+
+    out[valid] = x[idx[valid]]
+
+    if rmmissing:
+        out = out[~np.isnan(out).any(axis=1)]
+
+    return (out, timestamp) if return_timestamp else out
+    
 
 # def get_spikes_slow(spikes, event_times, 
 #                time_range=(-1, 2),  # in seconds: (t_start, t_end), e.g. (-0.5, 1.0)

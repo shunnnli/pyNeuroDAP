@@ -29,6 +29,7 @@ from .spikes import (
     make_orthogonal,
     convert_dask_to_numpy,
     parse_time_range,
+    get_traces,
 )
 
 from .models import (
@@ -106,6 +107,7 @@ __all__ = [
     'make_orthogonal',
     'convert_dask_to_numpy',
     'parse_time_range',
+    'get_traces',
 
     # SSM-based rSLDS modeling
     'fit_rslds_model',
