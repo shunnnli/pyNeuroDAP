@@ -11,7 +11,8 @@ from .spikes import get_time_axis, get_spikes
 def plot_sem(y, x=None, 
             label=None, color=None, ax=None, alpha=None, 
             fill=True,
-            plot_individual=False):
+            plot_individual=False,
+            individual_color=None):
 
     n_events, n_timepoints = y.shape
 
@@ -42,8 +43,10 @@ def plot_sem(y, x=None,
     if fill: ax.fill_between(x, mean - sem, mean + sem, alpha=0.2, color=color, edgecolor='None', label="_nolegend_")
 
     if plot_individual:
+        if individual_color is None:
+            individual_color = color
         for i, trace in enumerate(y):
-            ax.plot(x, trace, linewidth=0.5, color=color, alpha=0.2, label="_nolegend_")
+            ax.plot(x, trace, linewidth=0.5, color=individual_color, alpha=0.2, label="_nolegend_")
 
 
 def convert_dict_to_list(data):
