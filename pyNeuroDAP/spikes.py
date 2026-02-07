@@ -936,6 +936,16 @@ def get_traces(
     T = x.shape[0]
     event = np.asarray(event)
 
+    # # Check event format (to be compatible with event as single number)
+    # if not isinstance(event, np.ndarray) and not isinstance(event, list):
+    #     event_idx = np.array([event])
+    # else:
+    #     if len(data) == len(event):
+    #         event_idx = np.where(np.diff(event) == 1)[0] + 1
+    #     else:
+    #         event_idx = np.asarray(event, dtype=int)
+
+
     # ----------------------------
     # Choose window construction
     # ----------------------------
