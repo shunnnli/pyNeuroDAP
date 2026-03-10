@@ -148,7 +148,11 @@ def run_salt(spikes, stim_onsets, *,
              same_system=True,
              params=None,
              include_units=None,
+             unit_ids=None,
              p_threshold=0.01,
+             expected_direction='excite',
+             min_latency_ms=2.0,
+             reliability_threshold=None,
              seed=None,
              verbose=True):
     """
@@ -157,6 +161,10 @@ def run_salt(spikes, stim_onsets, *,
     Generates random baseline time points (before the first stimulus),
     extracts binary spike trains for baseline and test periods via
     :func:`get_spikes`, then calls :func:`salt` per unit.
+
+    In addition to the SALT p-value, per-unit quality metrics are
+    computed so that the ``tagged`` mask can incorporate direction,
+    latency, and reliability criteria.
 
     Parameters
     ----------
@@ -182,9 +190,31 @@ def run_salt(spikes, stim_onsets, *,
     params : dict or None
         Sync parameters; required when ``same_system=False``.
     include_units : array-like or None
-        Unit IDs to analyse.  *None* → all units.
+        Unit IDs to analyse (must match ``spikes[:, 1]``).
+        Same role as ``good_units`` in :func:`plot_all_units`.
+        *None* → all units.
+    unit_ids : array-like or None
+        Display-friendly unit IDs (e.g. ``good_unit_ids``).
+        Same role as ``good_unit_ids`` in :func:`plot_all_units`.
+        Returned in the results for labelling; does not affect
+        spike extraction.  *None* → falls back to *include_units*.
     p_threshold : float
         Significance threshold applied to ``tagged`` mask (default 0.01).
+    expected_direction : {'excite', 'inhibit', 'any'}
+        Expected direction of modulation for tagging.
+
+        - ``'excite'`` (default): only tag units whose firing rate
+          *increases* in the test window relative to baseline.
+        - ``'inhibit'``: only tag units whose rate *decreases*.
+        - ``'any'``: tag regardless of direction (original SALT
+          behaviour).
+    min_latency_ms : float or None
+        If set (milliseconds), only tag units whose median first-spike
+        latency is ≥ this value (to reject photoelectric artifacts).
+    reliability_threshold : float or None
+        If set (0–1), only tag units that spike on at least this
+        fraction of stimulus trials within the test window.
+        Typical optotagging: 0.25–0.5.
     seed : int or None
         Random-number-generator seed for baseline selection.
     verbose : bool
@@ -193,12 +223,17 @@ def run_salt(spikes, stim_onsets, *,
     Returns
     -------
     results : dict
-        ``p_values``  – np.ndarray (n_units,)
-        ``test_stats`` – np.ndarray (n_units,) JS-divergence values
-        ``latency_hists`` – list of np.ndarray per-unit latency histograms
-        ``units`` – np.ndarray of analysed unit IDs
-        ``tagged`` – np.ndarray (bool) units passing *p_threshold*
-        ``params`` – dict of analysis parameters
+        ``p_values``        – (n_units,) SALT p-values
+        ``test_stats``      – (n_units,) JS-divergence values
+        ``latency_hists``   – list of per-unit latency histogram arrays
+        ``units``           – unit IDs used for spike extraction (from *include_units*)
+        ``unit_ids``        – display unit IDs (from *unit_ids*, or same as *units*)
+        ``tagged``          – (n_units,) bool, units passing all criteria
+        ``direction``       – (n_units,) +1 excited, −1 inhibited, 0 unchanged
+        ``median_latency``  – (n_units,) median first-spike latency (s); NaN if no spikes
+        ``reliability``     – (n_units,) fraction of trials with ≥1 spike in test window
+        ``rate_change``     – (n_units,) test rate − baseline rate (Hz)
+        ``params``          – dict of analysis parameters
     """
     from .spikes import get_spikes
 
@@ -257,6 +292,12 @@ def run_salt(spikes, stim_onsets, *,
 
     units = baseline_aligned['params']['units']
     n_units = len(units)
+    n_bins_window = int(round(test_window / bin_size))
+
+    if unit_ids is None:
+        unit_ids = units
+    else:
+        unit_ids = np.asarray(unit_ids)
 
     # --- Run SALT per unit ------------------------------------------------
     p_values = np.full(n_units, np.nan)
@@ -275,23 +316,103 @@ def run_salt(spikes, stim_onsets, *,
             if verbose:
                 tqdm.write(f"  Unit {units[u]}: SALT failed – {e}")
 
+    # --- Per-unit quality metrics -----------------------------------------
+    direction = np.zeros(n_units, dtype=int)
+    median_latency = np.full(n_units, np.nan)
+    reliability = np.zeros(n_units)
+    rate_change = np.full(n_units, np.nan)
+
+    for u in range(n_units):
+        test_win = test_binary[u, :, :n_bins_window]     # (n_trials, n_bins_window)
+        n_trials = test_win.shape[0]
+
+        # Spike rate in test window (spikes/s) per trial
+        test_spike_count = test_win.sum(axis=1)           # (n_trials,)
+        test_rate = test_spike_count / test_window
+
+        # Baseline rate: average across all segments of equal length
+        n_bl_bins = bl_binary.shape[2]
+        n_segs = n_bl_bins // n_bins_window
+        if n_segs > 0:
+            bl_win = bl_binary[u, :, :n_segs * n_bins_window]
+            bl_win = bl_win.reshape(n_trials, n_segs, n_bins_window)
+            bl_rate = bl_win.sum(axis=2).mean(axis=1) / test_window  # (n_trials,)
+        else:
+            bl_rate = np.zeros(n_trials)
+
+        # Rate change (Hz)
+        mean_test = float(np.mean(test_rate))
+        mean_bl = float(np.mean(bl_rate))
+        rate_change[u] = mean_test - mean_bl
+
+        if mean_test > mean_bl:
+            direction[u] = 1
+        elif mean_test < mean_bl:
+            direction[u] = -1
+
+        # Reliability: fraction of trials with ≥1 spike in test window
+        reliability[u] = float(np.mean(test_spike_count > 0))
+
+        # Median first-spike latency (seconds) across trials that fired
+        latencies = _first_spike_latencies(test_win, n_bins_window)
+        fired = latencies < n_bins_window
+        if np.any(fired):
+            median_latency[u] = float(np.median(latencies[fired])) * bin_size
+
+    # --- Build tagged mask combining all criteria -------------------------
     tagged = p_values <= p_threshold
+
+    if expected_direction == 'excite':
+        tagged &= direction == 1
+    elif expected_direction == 'inhibit':
+        tagged &= direction == -1
+    elif expected_direction != 'any':
+        raise ValueError(
+            f"expected_direction must be 'excite', 'inhibit', or 'any', "
+            f"got {expected_direction!r}")
+
+    if min_latency_ms is not None:
+        min_latency_s = float(min_latency_ms) / 1000.0
+        tagged &= median_latency >= min_latency_s
+
+    if reliability_threshold is not None:
+        tagged &= reliability >= reliability_threshold
+
     if verbose:
         n_tagged = int(np.nansum(tagged))
-        print(f"SALT complete: {n_tagged}/{n_units} units tagged "
-              f"(p <= {p_threshold})")
+        n_sig = int(np.nansum(p_values <= p_threshold))
+        msg = (
+            f"SALT complete: {n_sig}/{n_units} units significant "
+            f"(p <= {p_threshold}), "
+            f"{n_tagged} tagged after filters "
+            f"(direction={expected_direction!r}"
+        )
+        if min_latency_ms is not None:
+            msg += f", latency>={min_latency_ms:.0f}ms"
+        if reliability_threshold is not None:
+            msg += f", reliability>={reliability_threshold:.0%}"
+        msg += ")"
+        print(msg)
 
     return {
         'p_values': p_values,
         'test_stats': test_stats,
         'latency_hists': latency_hists,
         'units': units,
+        'unit_ids': unit_ids,
         'tagged': tagged,
+        'direction': direction,
+        'median_latency': median_latency,
+        'reliability': reliability,
+        'rate_change': rate_change,
         'params': {
             'test_window': test_window,
             'bin_size': bin_size,
             'baseline_duration': baseline_duration,
             'p_threshold': p_threshold,
+            'expected_direction': expected_direction,
+            'min_latency_ms': min_latency_ms,
+            'reliability_threshold': reliability_threshold,
             'n_stim': n_stim,
         },
     }

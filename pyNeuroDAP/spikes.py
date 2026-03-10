@@ -83,8 +83,10 @@ def get_spikes(spikes, event_times,
     include_units = all_units if include_units is None else np.asarray(include_units, int)
     n_units = len(include_units)
 
-    # fast unit lookup LUT
+    # fast unit lookup LUT (sized to cover both spike data and requested units)
     max_unit = int(all_units.max()) if all_units.size else -1
+    if include_units.size:
+        max_unit = max(max_unit, int(include_units.max()))
     lut = -np.ones(max_unit + 1, dtype=int)
     lut[include_units] = np.arange(n_units, dtype=int)
 
