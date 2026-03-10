@@ -26,10 +26,16 @@ from .spikes import (
     downsample,
     get_time_axis,
     get_mod_index,
+    get_event_modulation,
     make_orthogonal,
     convert_dask_to_numpy,
     parse_time_range,
     get_traces,
+)
+
+from .optotag import (
+    salt,
+    run_salt,
 )
 
 from .models import (
@@ -103,11 +109,16 @@ __all__ = [
     'get_window',
     'downsample',
     'get_time_axis',
-    'get_mod_index', 
+    'get_mod_index',
+    'get_event_modulation',
     'make_orthogonal',
     'convert_dask_to_numpy',
     'parse_time_range',
     'get_traces',
+
+    # Optotagging
+    'salt',
+    'run_salt',
 
     # SSM-based rSLDS modeling
     'fit_rslds_model',

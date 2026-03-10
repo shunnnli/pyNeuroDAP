@@ -801,6 +801,151 @@ def subtract_baseline(spike_matrix, baseline_window=None, time_range=None, bin_s
     return baseline_subtracted, baseline_mean
 
 
+def get_event_modulation(aligned,
+                         baseline_window=None,
+                         response_window=None,
+                         mod_type='norm',
+                         test='wilcoxon',
+                         alpha=0.05):
+    """
+    Quantify per-unit firing-rate modulation relative to an aligned event.
+
+    Slices baseline and response windows from the aligned data, delegates
+    to :func:`get_mod_index` for the index computation, and adds
+    statistical testing (p-values, effect size, direction labels).
+
+    Parameters
+    ----------
+    aligned : dict
+        Output of :func:`get_spikes`.  Must contain ``'rate'``
+        (n_units, n_events, n_bins) and ``'params'`` with
+        ``'time_range'`` and ``'bin_size_ms'``.
+    baseline_window : tuple of float or None
+        ``(start_ms, end_ms)`` relative to event onset.
+        *None* → ``(time_range[0]*1000, 0)``.
+    response_window : tuple of float or None
+        ``(start_ms, end_ms)`` relative to event onset.
+        *None* → ``(0, time_range[1]*1000)``.
+    mod_type : str
+        Passed to :func:`get_mod_index` as *type*.
+        ``'norm'`` (default), ``'cd'``, or ``'d'``.
+    test : {'wilcoxon', 'ranksum', 'ttest'}
+        Statistical test for per-unit significance.
+        ``'wilcoxon'`` (signed-rank, paired) is recommended for
+        within-trial baseline-vs-response comparisons.
+    alpha : float
+        Significance threshold (default 0.05).
+
+    Returns
+    -------
+    results : dict
+        ``mod_index``      – (n_units,) modulation index from *get_mod_index*
+        ``p_values``       – (n_units,) statistical p-values
+        ``effect_size``    – (n_units,) paired Cohen's d
+        ``baseline_rates`` – (n_units,) mean baseline firing rate (Hz)
+        ``response_rates`` – (n_units,) mean response firing rate (Hz)
+        ``significant``    – (n_units,) boolean mask at *alpha*
+        ``direction``      – (n_units,) +1 excited, −1 inhibited, 0 n.s.
+        ``units``          – unit IDs analysed
+        ``params``         – parameters used
+    """
+    from scipy import stats as _stats
+
+    rate = np.asarray(aligned['rate'])
+    ap = aligned['params']
+    time_range = ap['time_range']
+    n_units, n_events, n_bins = rate.shape
+
+    t_ms = np.linspace(time_range[0] * 1000, time_range[1] * 1000, n_bins)
+
+    if baseline_window is None:
+        baseline_window = (time_range[0] * 1000, 0.0)
+    if response_window is None:
+        response_window = (0.0, time_range[1] * 1000)
+
+    bl_s = int(np.searchsorted(t_ms, baseline_window[0]))
+    bl_e = int(np.searchsorted(t_ms, baseline_window[1]))
+    rp_s = int(np.searchsorted(t_ms, response_window[0]))
+    rp_e = int(np.searchsorted(t_ms, response_window[1]))
+    bl_e = max(bl_e, bl_s + 1)
+    rp_e = max(rp_e, rp_s + 1)
+
+    # Slice windows: (n_units, n_events, window_bins)
+    bl_data = rate[:, :, bl_s:bl_e]
+    rp_data = rate[:, :, rp_s:rp_e]
+
+    # --- Modulation index via get_mod_index ---
+    # get_mod_index expects matching bin counts on axis 2, so we
+    # average each window down to 1 bin first, keeping the trial axis.
+    bl_collapsed = np.nanmean(bl_data, axis=2, keepdims=True)  # (units, events, 1)
+    rp_collapsed = np.nanmean(rp_data, axis=2, keepdims=True)
+    mod_index = get_mod_index(rp_collapsed, bl_collapsed, type=mod_type)
+
+    # --- Per-unit statistics (p-value, effect size) ---
+    p_values = np.full(n_units, np.nan)
+    effect_size = np.full(n_units, np.nan)
+    baseline_rates = np.full(n_units, np.nan)
+    response_rates = np.full(n_units, np.nan)
+
+    for u in range(n_units):
+        bl_trial = np.nanmean(bl_data[u], axis=1)   # (n_events,)
+        rp_trial = np.nanmean(rp_data[u], axis=1)
+
+        valid = ~(np.isnan(bl_trial) | np.isnan(rp_trial))
+        bl = bl_trial[valid]
+        rp = rp_trial[valid]
+        if len(bl) < 3:
+            continue
+
+        baseline_rates[u] = float(np.mean(bl))
+        response_rates[u] = float(np.mean(rp))
+
+        try:
+            if test == 'wilcoxon':
+                diff = rp - bl
+                if np.all(diff == 0):
+                    p_values[u] = 1.0
+                else:
+                    _, p_values[u] = _stats.wilcoxon(rp, bl,
+                                                     alternative='two-sided')
+            elif test == 'ranksum':
+                _, p_values[u] = _stats.mannwhitneyu(rp, bl,
+                                                     alternative='two-sided')
+            elif test == 'ttest':
+                _, p_values[u] = _stats.ttest_rel(rp, bl)
+            else:
+                raise ValueError(f"Unknown test: {test!r}")
+        except Exception:
+            p_values[u] = np.nan
+
+        diff = rp - bl
+        sd = np.std(diff, ddof=1)
+        effect_size[u] = np.mean(diff) / sd if sd > 0 else 0.0
+
+    significant = p_values < alpha
+    direction = np.zeros(n_units, dtype=int)
+    direction[significant & (mod_index > 0)] = 1
+    direction[significant & (mod_index < 0)] = -1
+
+    return {
+        'mod_index': mod_index,
+        'p_values': p_values,
+        'effect_size': effect_size,
+        'baseline_rates': baseline_rates,
+        'response_rates': response_rates,
+        'significant': significant,
+        'direction': direction,
+        'units': ap['units'],
+        'params': {
+            'baseline_window_ms': baseline_window,
+            'response_window_ms': response_window,
+            'mod_type': mod_type,
+            'test': test,
+            'alpha': alpha,
+        },
+    }
+
+
 def convert_dask_to_numpy(dask_array):
     """
     Convert a Dask array to NumPy array, handling unknown chunk sizes.
