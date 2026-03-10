@@ -39,8 +39,10 @@ def get_onset_times(event, fs=10000, min_separation=None, edge='rising', return_
         # Find rising edges: where signal goes from False to True
         edges = np.diff(bool_arr.astype(int)) == 1
     elif edge == 'falling':
-        # Find falling edges: where signal goes from True to False
-        edges = np.diff(bool_arr.astype(int)) == -1
+        # For falling edges, conceptually treat them as rising edges
+        # on the inverted signal (so "on" becomes True).
+        inv = ~bool_arr
+        edges = np.diff(inv.astype(int)) == 1
     else:
         raise ValueError(f"edge must be 'rising' or 'falling', got '{edge}'")
     

@@ -427,12 +427,13 @@ def plot_all_units(spikes, event, time_range, plot_style='raster',
             raise ValueError(f'Invalid plot style: {plot_style}')
         
         # Labels and formatting
-        ax.axvspan(event_onset, event_onset + event_duration, facecolor=event_color, alpha=event_alpha, edgecolor='none')  # transparent red shade from 0 to 10 ms, no edge
+        ax.axvspan(event_onset, event_onset + event_duration, facecolor=event_color, alpha=event_alpha, edgecolor='none')
+        ax.set_xlim(time_range)
         ax.set_xlabel('Time (s)', fontsize=9)
         if plot_style == 'trace' or plot_style == 'psth':
             ax.set_ylabel('Firing rate (Hz)', fontsize=9)
         else:
-            ax.set_ylabel('Spike count', fontsize=9)
+            ax.set_ylabel('Trial', fontsize=9)
         ax.set_title(f'Unit {unit_id}', fontsize=10)
         ax.tick_params(labelsize=9)
 
