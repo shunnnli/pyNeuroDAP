@@ -104,6 +104,7 @@ def process_session(session_name: str) -> dict:
     spike_path   = os.path.join(session_path, f'AIND_{session_name}')
     save_folder  = os.path.join(session_path, 'results')
     os.makedirs(save_folder, exist_ok=True)
+    analysis_filepath = os.path.join(save_folder, f'analysis-{session_name}.h5')
 
     print(f'\n{"="*60}')
     print(f'Analyzing session: {session_name}')
@@ -430,8 +431,13 @@ def process_session(session_name: str) -> dict:
     # Plot response changes to event-triggered trials
     # ------------------------------------------------------------------
     # Align spikes to a chosen event and count spikes from 0 to 1 s after onset
-    event_types = [opto_only_onsets, tone_only_onsets, pair_onsets, water_lick_onsets, airpuff_onsets]
-    event_names = ['red opto', 'tone', 'pair', 'water', 'airpuff']
+    if 'RANDOM' in session_name.upper():
+        event_types = [water_lick_onsets, tone_onsets, airpuff_onsets, redLaser_onsets]
+        event_names = ['water_lick', 'tone', 'airpuff', 'red_opto']
+    else:
+        event_types = [opto_only_onsets, tone_only_onsets, pair_onsets, water_lick_onsets, airpuff_onsets]
+        event_names = ['opto_only', 'tone_only', 'pair', 'water_lick', 'airpuff']
+
     for event_times, event_name in zip(event_types, event_names):
         bin_size_ms = 5 
         time_range = (-1, 2)
@@ -448,6 +454,8 @@ def process_session(session_name: str) -> dict:
             params=params,
             include_units=good_units,
         )
+        ndap.save_aligned_spikes(event_aligned, analysis_filepath, key=f'{event_name}')
+
         response_counts = ndap.get_window(
             event_aligned['count'],
             onset_time=0,
@@ -532,6 +540,47 @@ def process_session(session_name: str) -> dict:
         plt.savefig(os.path.join(save_folder, f'response_changes_{event_name}.pdf'), dpi=300, bbox_inches='tight')
         plt.close('all')
 
+
+    # ------------------------------------------------------------------
+    # Save analysis to HDF5  (analysis-{session_name}.h5)
+    # ------------------------------------------------------------------
+    print(f'  Saving analysis to: {analysis_filepath}')
+
+    # Blue opto aligned spikes (narrow window; 1 ms bins for precise latency analysis)
+    blue_opto_aligned = ndap.get_spikes(
+        spikes, optotag_event, time_range=(-0.05, 0.1), bin_size_ms=1,
+        same_system=False, params=params, include_units=good_units,
+    )
+    ndap.save_aligned_spikes(blue_opto_aligned, analysis_filepath, key='aligned_blue_opto')
+
+    # Event onset times (seconds)
+    ndap.save_variables({
+        'blueLaser_onsets':  blueLaser_onsets,
+        'redLaser_onsets':   redLaser_onsets,
+        'water_onsets':      water_onsets,
+        'tone_onsets':       tone_onsets,
+        'lick_onsets':       lick_onsets,
+        'airpuff_onsets':    airpuff_onsets,
+        'water_lick_onsets': water_lick_onsets,
+        'optotag_event':     optotag_event,
+        'tone_only_onsets':  tone_only_onsets,
+        'opto_only_onsets':  opto_only_onsets,
+        'pair_onsets':       pair_onsets,
+    }, analysis_filepath, key='event_onsets')
+
+    # Unit info
+    ndap.save_variables({
+        'good_units':    good_units,
+        'good_unit_ids': good_unit_ids,
+        'tagged_units':  np.array(result['tagged_units']),
+        'peak_channels': np.array(result['peak_channels']),
+    }, analysis_filepath, key='unit_info')
+
+    # SALT results (latency_hists omitted — complex inhomogeneous list)
+    salt_to_save = {k: v for k, v in salt_results.items() if k != 'latency_hists'}
+    ndap.save_variables(salt_to_save, analysis_filepath, key='salt_results')
+
+    print(f'  Analysis saved.')
 
     return result
 
