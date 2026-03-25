@@ -59,7 +59,8 @@ all_sessions = [
 # Global parameters  (same defaults as the notebook)
 # ---------------------------------------------------------------------------
 data_root = r'/Users/shunli/Projects/pyNeuroDAP/Data'
-output_txt_path = os.path.join(data_root, 'optotag_results_all_sessions.txt')
+result_root = r'/Users/shunli/Projects/pyNeuroDAP/Results/SL412'
+output_txt_path = os.path.join(result_root, 'optotag_results_all_sessions.txt')
 
 # QC thresholds
 ISI_violation_ratio_cutoff = 0.5
