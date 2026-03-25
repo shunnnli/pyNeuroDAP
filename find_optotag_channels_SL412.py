@@ -118,7 +118,7 @@ def process_session(session_name: str) -> dict:
         return result
 
     # Read sorting-curation.json if it exists
-    curation_path = os.path.join(spike_path, 'sorting-curation.json')
+    curation_path = os.path.join(session_path, 'sorting-curation.json')
     if os.path.exists(curation_path):
         with open(curation_path) as f:
             sorting_curation = json.load(f)
