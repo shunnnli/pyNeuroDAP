@@ -557,6 +557,15 @@ def process_session(session_name: str) -> dict:
     # ------------------------------------------------------------------
     print(f'  Saving analysis to: {analysis_filepath}')
 
+    # Session info
+    session_type = 'random' if 'RANDOM' in session_name.upper() else 'reward' if 'REWARD' in session_name.upper() else 'punish'
+    ndap.save_variables({
+        'session_name': session_name,
+        'subject_id': 'SL412', # to be change later
+        'recording_location': 'LHb',
+        'session_type': session_type,
+    }, analysis_filepath, key='session_info')
+
     # Event onset times (seconds)
     ndap.save_variables({
         'blueLaser_onsets':  blueLaser_onsets,
@@ -566,7 +575,7 @@ def process_session(session_name: str) -> dict:
         'lick_onsets':       lick_onsets,
         'airpuff_onsets':    airpuff_onsets,
         'water_lick_onsets': water_lick_onsets,
-        'optotag_onsets':     optotag_onsets,
+        'optotag_onsets':    optotag_onsets,
         'tone_only_onsets':  tone_only_onsets,
         'opto_only_onsets':  opto_only_onsets,
         'pair_onsets':       pair_onsets,
