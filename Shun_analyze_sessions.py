@@ -12,6 +12,7 @@ For every session listed in `all_sessions`, this script:
   4. Runs SALT to identify opto-tagged units.
   5. Collects, for each session, the tagged unit IDs and their corresponding
      peak channels.
+  6. Plots PSTH for each event for each unit and saves the figures to the session folder.
 
 Output
 ------
