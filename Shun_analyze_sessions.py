@@ -246,13 +246,13 @@ def process_session(session_name: str) -> dict:
     # ------------------------------------------------------------------
     session_upper = session_name.upper()
     if 'RANDOM1' in session_upper or 'RANDOM2' in session_upper or 'RANDOM3' in session_upper:
-        optotag_event = blueLaser_onsets           # for random1-3
+        optotag_onsets = blueLaser_onsets           # for random1-3
     elif 'RANDOM4' in session_upper:
-        optotag_event = blueLaser_onsets[-50:]     # for random4
+        optotag_onsets = blueLaser_onsets[-50:]     # for random4
     else:
-        optotag_event = blueLaser_onsets[:50]      # for reward1 and after
-    print(f'  Using {len(optotag_event)} opto optotag_events for SALT (rule: '
-          f'{"all" if optotag_event is blueLaser_onsets else ("last 50" if "RANDOM4" in session_upper else "first 50")})')
+        optotag_onsets = blueLaser_onsets[:50]      # for reward1 and after
+    print(f'  Using {len(optotag_onsets)} opto optotag_events for SALT (rule: '
+          f'{"all" if optotag_onsets is blueLaser_onsets else ("last 50" if "RANDOM4" in session_upper else "first 50")})')
 
 
     # ------------------------------------------------------------------
@@ -291,7 +291,7 @@ def process_session(session_name: str) -> dict:
     # ------------------------------------------------------------------
     try:
         salt_results = ndap.run_salt(
-            spikes, optotag_event,
+            spikes, optotag_onsets,
             test_window=salt_test_window,
             bin_size=salt_bin_size,
             baseline_duration=salt_baseline_duration,
@@ -327,7 +327,7 @@ def process_session(session_name: str) -> dict:
 
     # Blue opto
     ndap.plot_all_units(
-        spikes, optotag_event, (-0.05, 0.1), plot_style='raster',
+        spikes, optotag_onsets, (-0.05, 0.1), plot_style='raster',
         good_units=good_units, good_unit_ids=good_unit_ids,
         same_system=False, params=params, bin_size_ms=5,
         event_color='tab:cyan', event_duration=0.01, event_label='blue opto',
@@ -432,16 +432,16 @@ def process_session(session_name: str) -> dict:
     # ------------------------------------------------------------------
     # Align spikes to a chosen event and count spikes from 0 to 1 s after onset
     if 'RANDOM' in session_name.upper():
-        event_types = [water_lick_onsets, tone_onsets, airpuff_onsets, redLaser_onsets]
-        event_names = ['water_lick', 'tone', 'airpuff', 'red_opto']
+        event_types = [water_lick_onsets, tone_onsets, airpuff_onsets, redLaser_onsets, optotag_onsets]
+        event_names = ['water_lick', 'tone', 'airpuff', 'red_opto', 'blue_opto']
     else:
-        event_types = [opto_only_onsets, tone_only_onsets, pair_onsets, water_lick_onsets, airpuff_onsets]
-        event_names = ['opto_only', 'tone_only', 'pair', 'water_lick', 'airpuff']
+        event_types = [opto_only_onsets, tone_only_onsets, pair_onsets, water_lick_onsets, airpuff_onsets, optotag_onsets]
+        event_names = ['opto_only', 'tone_only', 'pair', 'water_lick', 'airpuff', 'blue_opto']
 
     for event_times, event_name in zip(event_types, event_names):
-        bin_size_ms = 5 
-        time_range = (-1, 2)
-        response_window_ms = (0, 1000)
+        bin_size_ms = 5 if event_name != 'blue_opto' else 1
+        time_range = (-1, 2) if event_name != 'blue_opto' else (-0.05, 0.1)
+        response_window_ms = (0, 1000) if event_name != 'blue_opto' else (0, 50)
         xaxis = ndap.get_time_axis(time_range=time_range, bin_size_ms=bin_size_ms)
 
         # Align good units to the selected event
@@ -454,8 +454,9 @@ def process_session(session_name: str) -> dict:
             params=params,
             include_units=good_units,
         )
-        ndap.save_aligned_spikes(event_aligned, analysis_filepath, key=f'{event_name}')
+        ndap.save_aligned_spikes(event_aligned, analysis_filepath, key=f'spikes_{event_name}')
 
+        # Get response counts
         response_counts = ndap.get_window(
             event_aligned['count'],
             onset_time=0,
@@ -510,6 +511,16 @@ def process_session(session_name: str) -> dict:
             alpha=0.05,
         )
 
+        # Save results to h5
+        ndap.save_variables({
+            'response_counts': response_counts,
+            'event_rates': event_rates,
+            'event_rates_diff': event_rates_diff,
+            'event_rates_diff_grouped': event_rates_diff_grouped,
+            'slopes': slopes,
+            'mod_results': mod_results,
+        }, analysis_filepath, key=f'response_changes_{event_name}')
+
         # Plot trial vs normalized spikes for each unit, with x-axis as individual trial
         fig, axs = plt.subplots(1, 3, figsize=(20, 8))
 
@@ -546,13 +557,6 @@ def process_session(session_name: str) -> dict:
     # ------------------------------------------------------------------
     print(f'  Saving analysis to: {analysis_filepath}')
 
-    # Blue opto aligned spikes (narrow window; 1 ms bins for precise latency analysis)
-    blue_opto_aligned = ndap.get_spikes(
-        spikes, optotag_event, time_range=(-0.05, 0.1), bin_size_ms=1,
-        same_system=False, params=params, include_units=good_units,
-    )
-    ndap.save_aligned_spikes(blue_opto_aligned, analysis_filepath, key='aligned_blue_opto')
-
     # Event onset times (seconds)
     ndap.save_variables({
         'blueLaser_onsets':  blueLaser_onsets,
@@ -562,7 +566,7 @@ def process_session(session_name: str) -> dict:
         'lick_onsets':       lick_onsets,
         'airpuff_onsets':    airpuff_onsets,
         'water_lick_onsets': water_lick_onsets,
-        'optotag_event':     optotag_event,
+        'optotag_onsets':     optotag_onsets,
         'tone_only_onsets':  tone_only_onsets,
         'opto_only_onsets':  opto_only_onsets,
         'pair_onsets':       pair_onsets,
