@@ -1,6 +1,10 @@
 import re
+import warnings
+
 import numpy as np
 import pandas as pd
+
+from .spikes import get_spikes, get_time_axis
 
 def get_onset_times(event, fs=10000, min_separation=None, edge='rising', return_time=False):
     """
@@ -360,3 +364,90 @@ def split_paired_events(event1_onsets, event2_onsets, pair_tolerance=0.02, fs=10
     pair_onsets = pair_event2_onsets.copy()
 
     return event1_only_onsets, event2_only_onsets, pair_onsets, pair_event1_onsets, pair_event2_onsets
+
+
+
+def get_licks(
+    lick_onsets,
+    event_times,
+    time_range=(-1, 2),
+    bin_size_ms=100,
+    fs=10000,
+    event_times_in_samples=True,
+    verbose=False,
+):
+    """
+    Align lick onsets to event times on the NI system.
+
+    Parameters
+    ----------
+    lick_onsets : array-like
+        1D array of lick onset times in NI samples.
+    event_times : array-like
+        1D array of alignment event times.
+        Usually NI samples; can also be seconds if event_times_in_samples=False.
+    time_range : tuple, default (-1, 2)
+        Time window around each event, in seconds.
+    bin_size_ms : int, default 25
+        Bin size in milliseconds.
+    ni_fs : float, default 1000
+        Sampling rate of the NI system in Hz.
+    event_times_in_samples : bool, default True
+        If True, event_times are interpreted as NI samples and converted to seconds.
+        If False, event_times are assumed to already be in seconds.
+    verbose : bool, default False
+        Passed to ndap.get_spikes().
+
+    Returns
+    -------
+    aligned : dict
+        A spike-like aligned output with one pseudo-unit ("lick"), plus convenience fields:
+        - aligned['count']      : shape (1, n_events, n_bins)
+        - aligned['rate']       : shape (1, n_events, n_bins)
+        - aligned['times']      : list of relative lick times for each event
+        - aligned['xaxis']      : bin centers in seconds
+        - aligned['lickTraces'] : shape (n_events, n_bins)
+        - aligned['lickRate']   : shape (n_events, n_bins)
+        - aligned['lickEvents'] : list of np.ndarray, relative lick times per event
+    """
+    lick_onsets = np.asarray(lick_onsets).ravel()
+    lick_onsets = lick_onsets[np.isfinite(lick_onsets)].astype(np.int64)
+    lick_onsets = np.sort(np.unique(lick_onsets))
+
+    event_times = np.asarray(event_times).ravel()
+    event_times = event_times[np.isfinite(event_times)]
+
+    if event_times_in_samples:
+        event_times_sec = event_times.astype(float) / float(fs)
+    else:
+        event_times_sec = event_times.astype(float)
+
+    # Represent all licks as spikes from one pseudo-unit (unit 0)
+    lick_spikes = np.column_stack([
+        lick_onsets,
+        np.zeros(len(lick_onsets), dtype=np.int64)
+    ])
+
+    aligned = get_spikes(
+        spikes=lick_spikes,
+        event_times=event_times_sec,
+        time_range=time_range,
+        bin_size_ms=bin_size_ms,
+        ap_fs=fs,
+        same_system=True,
+        include_units=[0],
+        subtract_baseline_spikes=False,
+        verbose=verbose,
+    )
+
+    xaxis = get_time_axis(time_range=time_range, bin_size_ms=bin_size_ms)
+
+    aligned['xaxis'] = xaxis
+    aligned['params']['unit_labels'] = np.array(['lick'])
+    aligned['params']['source'] = 'lick_onsets_ni'
+
+    aligned['count'] = aligned['count'][0]   # (n_events, n_bins)
+    aligned['rate'] = aligned['rate'][0]      # (n_events, n_bins)
+    aligned['times'] = aligned['times'][0]   # list of arrays, one per event
+
+    return aligned

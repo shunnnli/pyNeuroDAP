@@ -57,7 +57,8 @@ from .trials import (
     get_trial_table,
     get_trial_times,
     get_trial_data,
-    split_paired_events
+    split_paired_events,
+    get_licks,
 )
 
 from .sessions import (
@@ -140,7 +141,8 @@ __all__ = [
     'get_trial_times',
     'get_trial_data',
     'split_paired_events',
-    
+    'get_licks',
+
     # Session management
     'save_dataframe',
     'load_dataframe',

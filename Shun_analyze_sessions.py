@@ -563,7 +563,7 @@ def process_session(session_name: str) -> dict:
     session_date = session_name.split('-')[0]
     ndap.save_variables({
         'session_name': session_name,
-        'subject_id': animal_id,
+        'animal_id': animal_id,
         'recording_location': 'LHb',
         'session_type': session_type,
         'session_date': session_date,
