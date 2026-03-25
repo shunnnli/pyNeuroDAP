@@ -271,3 +271,92 @@ def get_trial_data(trial_data_df, trial_conditions, event_types=None):
             trial_data[cond]['last_lick'] = event_times['last_lick_times'][cond]
     
     return trial_data
+
+def split_paired_events(event1_onsets, event2_onsets, pair_tolerance=0.02, fs=10000):
+    """
+    Split two event streams' onset times into:
+      - event1_only_onsets
+      - event2_only_onsets
+      - pair_onsets
+      - pair_event1_onsets
+      - pair_event2_onsets
+
+    Parameters
+    ----------
+    event1_onsets : array-like
+        First event stream onset times in samples.
+    event2_onsets : array-like
+        Second event stream onset times in samples.
+    pair_tolerance : float, optional
+        Max allowed time difference (s) to count event1 and event2 as paired.
+    fs : float, optional
+        Sampling frequency in Hz.
+
+    Returns
+    -------
+    event1_only_onsets : np.ndarray
+    event2_only_onsets : np.ndarray
+    pair_onsets : np.ndarray
+        Paired event times, using the second event stream's timestamps.
+    pair_event1_onsets : np.ndarray
+        First-stream timestamps for the paired events.
+    pair_event2_onsets : np.ndarray
+        Second-stream timestamps for the paired events.
+    """
+    event1_onsets = np.sort(np.asarray(event1_onsets, dtype=int))
+    event2_onsets = np.sort(np.asarray(event2_onsets, dtype=int))
+
+    if len(event1_onsets) == 0:
+        return event1_onsets, event2_onsets, np.array([]), np.array([]), np.array([])
+    if len(event2_onsets) == 0:
+        return event1_onsets, event2_onsets, np.array([]), np.array([]), np.array([])
+
+    # Convert pair tolerance to samples
+    pair_tolerance_samples = int(pair_tolerance * fs)
+
+    paired_event1_idx = []
+    paired_event2_idx = []
+
+    used_event1_idx = set()
+
+    # Pair each event2 onset to its nearest event1 onset (within tolerance),
+    # ensuring each event1 onset can be used at most once.
+    for i, event2_t in enumerate(event2_onsets):
+        insert_idx = np.searchsorted(event1_onsets, event2_t)
+
+        candidate_idx = []
+        if insert_idx > 0:
+            candidate_idx.append(insert_idx - 1)
+        if insert_idx < len(event1_onsets):
+            candidate_idx.append(insert_idx)
+
+        if not candidate_idx:
+            continue
+
+        nearest_idx = min(candidate_idx, key=lambda j: abs(event1_onsets[j] - event2_t))
+        nearest_dt = abs(event1_onsets[nearest_idx] - event2_t)
+
+        if nearest_dt <= pair_tolerance_samples and nearest_idx not in used_event1_idx:
+            paired_event1_idx.append(nearest_idx)
+            paired_event2_idx.append(i)
+            used_event1_idx.add(nearest_idx)
+
+    paired_event1_idx = np.array(paired_event1_idx, dtype=int)
+    paired_event2_idx = np.array(paired_event2_idx, dtype=int)
+
+    event1_pair_mask = np.zeros(len(event1_onsets), dtype=bool)
+    event2_pair_mask = np.zeros(len(event2_onsets), dtype=bool)
+
+    event1_pair_mask[paired_event1_idx] = True
+    event2_pair_mask[paired_event2_idx] = True
+
+    event1_only_onsets = event1_onsets[~event1_pair_mask]
+    event2_only_onsets = event2_onsets[~event2_pair_mask]
+
+    pair_event1_onsets = event1_onsets[event1_pair_mask]
+    pair_event2_onsets = event2_onsets[event2_pair_mask]
+
+    # Use event2 times as the paired event timestamps.
+    pair_onsets = pair_event2_onsets.copy()
+
+    return event1_only_onsets, event2_only_onsets, pair_onsets, pair_event1_onsets, pair_event2_onsets
