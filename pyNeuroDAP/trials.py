@@ -443,9 +443,6 @@ def get_licks(
     xaxis = get_time_axis(time_range=time_range, bin_size_ms=bin_size_ms)
 
     aligned['xaxis'] = xaxis
-    aligned['params']['unit_labels'] = np.array(['lick'])
-    aligned['params']['source'] = 'lick_onsets_ni'
-
     aligned['count'] = aligned['count'][0]   # (n_events, n_bins)
     aligned['rate'] = aligned['rate'][0]      # (n_events, n_bins)
     aligned['times'] = aligned['times'][0]   # list of arrays, one per event
