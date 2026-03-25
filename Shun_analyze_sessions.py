@@ -207,7 +207,7 @@ def process_session(session_name: str) -> dict:
         data_mat = ndap.load_mat(os.path.join(session_path, f'data_{session_name}.mat'))
         water    = data_mat['rightSolenoid'].flatten() if 'rightSolenoid' in data_mat else None
         lick     = data_mat['rightLick'].flatten()     if 'rightLick'     in data_mat else None
-        tone     = data_mat['rightTone'].flatten()     if 'rightTone'     in data_mat else None
+        tone     = data_mat['leftTone'].flatten()      if 'leftTone'      in data_mat else None
         blueLaser = data_mat['blueLaser'].flatten()    if 'blueLaser'     in data_mat else None
         redLaser  = data_mat['redLaser'].flatten()     if 'redLaser'      in data_mat else None
         airpuff   = data_mat['airpuff'].flatten()      if 'airpuff'       in data_mat else None
@@ -229,6 +229,42 @@ def process_session(session_name: str) -> dict:
     blueLaser_onsets = ndap.get_onset_times(blueLaser, fs=behaviorFs, min_separation=0.5, edge='falling')
     redLaser_onsets  = ndap.get_onset_times(redLaser,  fs=behaviorFs, min_separation=1,   edge='falling') if redLaser is not None else np.array([])
 
+    # ------------------------------------------------------------------
+    # Session-specific event modification
+    #   For random1, redLaser_onsets is 500ms earlier than calculation
+    # ------------------------------------------------------------------
+    if 'RANDOM1' in session_name.upper():
+        redLaser_onsets = redLaser_onsets - 0.5
+
+
+    # ------------------------------------------------------------------
+    # Session-specific opto event selection  (notebook: Plot PSTH near blue opto)
+    #   event = blueLaser_onsets        # for random1-3
+    #   event = blueLaser_onsets[:50]   # for reward1 and after
+    #   event = blueLaser_onsets[-50:]  # for random4
+    # ------------------------------------------------------------------
+    session_upper = session_name.upper()
+    if 'RANDOM1' in session_upper or 'RANDOM2' in session_upper or 'RANDOM3' in session_upper:
+        optotag_event = blueLaser_onsets           # for random1-3
+    elif 'RANDOM4' in session_upper:
+        optotag_event = blueLaser_onsets[-50:]     # for random4
+    else:
+        optotag_event = blueLaser_onsets[:50]      # for reward1 and after
+    print(f'  Using {len(optotag_event)} opto optotag_events for SALT (rule: '
+          f'{"all" if optotag_event is blueLaser_onsets else ("last 50" if "RANDOM4" in session_upper else "first 50")})')
+
+
+    # ------------------------------------------------------------------
+    # Finalize event onsets
+    # ------------------------------------------------------------------
+
+    # Separate between pair vs unpair trials
+    tone_only_onsets, opto_only_onsets, pair_onsets, _, _ = ndap.split_paired_events(
+        event1_onsets=tone_onsets,
+        event2_onsets=redLaser_onsets,
+        pair_tolerance=0.05
+    )
+
     # Rewarded lick = first lick after each water delivery  (mirrors notebook)
     if water_onsets.size == 0 or lick_onsets.size == 0:
         water_lick_onsets = np.array([])
@@ -247,29 +283,14 @@ def process_session(session_name: str) -> dict:
         result['error'] = 'No blue laser onsets found'
         print(f'  ERROR: {result["error"]}')
         return result
-
-    # ------------------------------------------------------------------
-    # Session-specific opto event selection  (notebook: Plot PSTH near blue opto)
-    #   event = blueLaser_onsets        # for random1-3
-    #   event = blueLaser_onsets[:50]   # for reward1 and after
-    #   event = blueLaser_onsets[-50:]  # for random4
-    # ------------------------------------------------------------------
-    session_upper = session_name.upper()
-    if 'RANDOM1' in session_upper or 'RANDOM2' in session_upper or 'RANDOM3' in session_upper:
-        event = blueLaser_onsets           # for random1-3
-    elif 'RANDOM4' in session_upper:
-        event = blueLaser_onsets[-50:]     # for random4
-    else:
-        event = blueLaser_onsets[:50]      # for reward1 and after
-    print(f'  Using {len(event)} opto events for SALT (rule: '
-          f'{"all" if event is blueLaser_onsets else ("last 50" if "RANDOM4" in session_upper else "first 50")})')
+    
 
     # ------------------------------------------------------------------
     # Run SALT  (notebook: Plot PSTH near blue opto)
     # ------------------------------------------------------------------
     try:
         salt_results = ndap.run_salt(
-            spikes, event,
+            spikes, optotag_event,
             test_window=salt_test_window,
             bin_size=salt_bin_size,
             baseline_duration=salt_baseline_duration,
@@ -303,9 +324,9 @@ def process_session(session_name: str) -> dict:
     # Plot aligned spikes for every event  (mirrors notebook PSTH cells)
     # ------------------------------------------------------------------
 
-    # Blue opto  (notebook cell 24)
+    # Blue opto
     ndap.plot_all_units(
-        spikes, event, (-0.05, 0.1), plot_style='raster',
+        spikes, optotag_event, (-0.05, 0.1), plot_style='raster',
         good_units=good_units, good_unit_ids=good_unit_ids,
         same_system=False, params=params, bin_size_ms=5,
         event_color='tab:cyan', event_duration=0.01, event_label='blue opto',
@@ -313,33 +334,7 @@ def process_session(session_name: str) -> dict:
     )
     plt.close('all')
 
-    # Red opto  (notebook cell 26)
-    if redLaser_onsets.size > 0:
-        ndap.plot_all_units(
-            spikes, redLaser_onsets, (-0.5, 2), plot_style='raster',
-            good_units=good_units, good_unit_ids=good_unit_ids,
-            same_system=False, params=params, bin_size_ms=5,
-            event_color='tab:red', event_duration=0.5, event_label='red opto',
-            save_figure=True, save_folder=save_folder,
-        )
-        plt.close('all')
-    else:
-        print('  Skipping red opto plot (no onsets).')
-
-    # Water  (notebook cell 28)
-    if water_lick_onsets.size > 0:
-        ndap.plot_all_units(
-            spikes, water_lick_onsets, (-0.5, 2), plot_style='raster',
-            good_units=good_units, good_unit_ids=good_unit_ids,
-            same_system=False, params=params, bin_size_ms=5,
-            event_color='tab:cyan', event_duration=0.2, event_label='water',
-            save_figure=True, save_folder=save_folder,
-        )
-        plt.close('all')
-    else:
-        print('  Skipping water plot (no onsets).')
-
-    # Airpuff  (notebook cell 30)
+    # Airpuff
     if airpuff_onsets.size > 0:
         ndap.plot_all_units(
             spikes, airpuff_onsets, (-0.5, 2), plot_style='raster',
@@ -352,18 +347,83 @@ def process_session(session_name: str) -> dict:
     else:
         print('  Skipping airpuff plot (no onsets).')
 
-    # Tone
-    if tone_onsets.size > 0:
+    # Water
+    if water_lick_onsets.size > 0:
         ndap.plot_all_units(
-            spikes, tone_onsets, (-0.5, 2), plot_style='raster',
+            spikes, water_lick_onsets, (-0.5, 2), plot_style='raster',
             good_units=good_units, good_unit_ids=good_unit_ids,
             same_system=False, params=params, bin_size_ms=5,
-            event_color='tab:orange', event_duration=0.2, event_label='tone',
+            event_color='tab:cyan', event_duration=0.2, event_label='water',
             save_figure=True, save_folder=save_folder,
         )
         plt.close('all')
     else:
-        print('  Skipping tone plot (no onsets).')
+        print('  Skipping water plot (no onsets).')
+
+    # Trial onset
+    if 'RANDOM' in session_name.upper():
+        # Tone
+        if tone_onsets.size > 0:
+            ndap.plot_all_units(
+                spikes, tone_onsets, (-0.5, 2), plot_style='raster',
+                good_units=good_units, good_unit_ids=good_unit_ids,
+                same_system=False, params=params, bin_size_ms=5,
+                event_color='tab:orange', event_duration=0.2, event_label='tone',
+                save_figure=True, save_folder=save_folder,
+            )
+            plt.close('all')
+        else:
+            print('  Skipping tone plot (no onsets).')
+        
+        # Red opto
+        if redLaser_onsets.size > 0:
+            ndap.plot_all_units(
+                spikes, redLaser_onsets, (-0.5, 2), plot_style='raster',
+                good_units=good_units, good_unit_ids=good_unit_ids,
+                same_system=False, params=params, bin_size_ms=5,
+                event_color='tab:red', event_duration=0.5, event_label='red opto',
+                save_figure=True, save_folder=save_folder,
+            )
+            plt.close('all')
+        else:
+            print('  Skipping red opto plot (no onsets).')
+    else:
+        # Pair trials
+        if pair_onsets.size > 0:
+            ndap.plot_all_units(
+                spikes, pair_onsets, (-0.5, 2), plot_style='raster',
+                good_units=good_units, good_unit_ids=good_unit_ids,
+                same_system=False, params=params, bin_size_ms=5,
+                event_color='tab:red', event_duration=0.5, event_label='red opto',
+                save_figure=True, save_folder=save_folder,
+            )
+            plt.close('all')
+        else:
+            print('  Skipping pair plot (no onsets).')
+
+        if opto_only_onsets.size > 0:
+            ndap.plot_all_units(
+                spikes, opto_only_onsets, (-0.5, 2), plot_style='raster',
+                good_units=good_units, good_unit_ids=good_unit_ids,
+                same_system=False, params=params, bin_size_ms=5,
+                event_color='tab:red', event_duration=0.5, event_label='red opto',
+                save_figure=True, save_folder=save_folder,
+            )
+            plt.close('all')
+        else:
+            print('  Skipping opto only plot (no onsets).')
+
+        if tone_only_onsets.size > 0:
+            ndap.plot_all_units(
+                spikes, tone_only_onsets, (-0.5, 2), plot_style='raster',
+                good_units=good_units, good_unit_ids=good_unit_ids,
+                same_system=False, params=params, bin_size_ms=5,
+                event_color='tab:orange', event_duration=0.2, event_label='tone',
+                save_figure=True, save_folder=save_folder,
+            )
+            plt.close('all')
+        else:
+            print('  Skipping tone only plot (no onsets).')
 
     return result
 
