@@ -559,11 +559,14 @@ def process_session(session_name: str) -> dict:
 
     # Session info
     session_type = 'random' if 'RANDOM' in session_name.upper() else 'reward' if 'REWARD' in session_name.upper() else 'punish'
+    animal_id = session_name.split('-')[1]
+    session_date = session_name.split('-')[0]
     ndap.save_variables({
         'session_name': session_name,
-        'subject_id': 'SL412', # to be change later
+        'subject_id': animal_id,
         'recording_location': 'LHb',
         'session_type': session_type,
+        'session_date': session_date,
     }, analysis_filepath, key='session_info')
 
     # Event onset times (seconds)
