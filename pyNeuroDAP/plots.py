@@ -371,7 +371,7 @@ def plot_psth(spike_data, time_window=None, bin_size_ms=50, ax=None,
 def plot_all_units(spikes, event, time_range, plot_style='raster',
                 bin_size_ms = 5, good_units = None, good_unit_ids = None,
                 params = None, same_system = False,
-                save_figure = False, save_folder = None, figsize=(15, 3),
+                save_figure = False, save_folder = None, figsize=(15, 3), save_png=False, save_pdf=True,
                 event_color='tab:red', event_duration=0.5, event_label='Event', event_alpha=0.25, event_onset=0,
                 spike_color='tab:blue',):
 
@@ -446,8 +446,10 @@ def plot_all_units(spikes, event, time_range, plot_style='raster',
 
     # Save figure
     if save_figure is True and save_folder is not None:
-        fig.savefig(os.path.join(save_folder, f'PSTH_{plot_style}_{event_label}.png'), dpi=300, bbox_inches='tight')
-        fig.savefig(os.path.join(save_folder, f'PSTH_{plot_style}_{event_label}.pdf'), dpi=300, bbox_inches='tight')
+        if save_png is True:
+            fig.savefig(os.path.join(save_folder, f'PSTH_{plot_style}_{event_label}.png'), dpi=300, bbox_inches='tight')
+        if save_pdf is True:
+            fig.savefig(os.path.join(save_folder, f'PSTH_{plot_style}_{event_label}.pdf'), dpi=300, bbox_inches='tight')
         print(f'Saved PSTH plots for {n_units} units aligned to {event_label}')
 
 

@@ -29,6 +29,9 @@ import os
 import json
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')   # non-interactive backend for batch saving
+import matplotlib.pyplot as plt
 
 import pyNeuroDAP as ndap
 
@@ -200,8 +203,13 @@ def process_session(session_name: str) -> dict:
         return result
 
     try:
-        data_mat  = ndap.load_mat(os.path.join(session_path, f'data_{session_name}.mat'))
-        blueLaser = data_mat['blueLaser'].flatten() if 'blueLaser' in data_mat else None
+        data_mat = ndap.load_mat(os.path.join(session_path, f'data_{session_name}.mat'))
+        water    = data_mat['rightSolenoid'].flatten() if 'rightSolenoid' in data_mat else None
+        lick     = data_mat['rightLick'].flatten()     if 'rightLick'     in data_mat else None
+        tone     = data_mat['rightTone'].flatten()     if 'rightTone'     in data_mat else None
+        blueLaser = data_mat['blueLaser'].flatten()    if 'blueLaser'     in data_mat else None
+        redLaser  = data_mat['redLaser'].flatten()     if 'redLaser'      in data_mat else None
+        airpuff   = data_mat['airpuff'].flatten()      if 'airpuff'       in data_mat else None
     except Exception as e:
         result['error'] = f'Failed to load data mat: {e}'
         print(f'  ERROR: {result["error"]}')
@@ -212,8 +220,27 @@ def process_session(session_name: str) -> dict:
         print(f'  ERROR: {result["error"]}')
         return result
 
+    # Extract onset times  (mirrors notebook: Load behavior & photometry)
+    water_onsets    = ndap.get_onset_times(water,    edge='rising',  fs=behaviorFs, min_separation=0.5) if water   is not None else np.array([])
+    tone_onsets     = ndap.get_onset_times(tone,     edge='rising',  fs=behaviorFs, min_separation=0.5) if tone    is not None else np.array([])
+    lick_onsets     = ndap.get_onset_times(lick,     edge='rising',  fs=behaviorFs, min_separation=0.5) if lick    is not None else np.array([])
+    airpuff_onsets  = ndap.get_onset_times(airpuff,  edge='rising',  fs=behaviorFs, min_separation=0.5) if airpuff is not None else np.array([])
     blueLaser_onsets = ndap.get_onset_times(blueLaser, fs=behaviorFs, min_separation=0.5, edge='falling')
-    print(f'  Blue laser onsets: {len(blueLaser_onsets)}')
+    redLaser_onsets  = ndap.get_onset_times(redLaser,  fs=behaviorFs, min_separation=1,   edge='falling') if redLaser is not None else np.array([])
+
+    # Rewarded lick = first lick after each water delivery  (mirrors notebook)
+    if water_onsets.size == 0 or lick_onsets.size == 0:
+        water_lick_onsets = np.array([])
+    else:
+        lick_onsets_sorted = np.sort(lick_onsets) if np.any(np.diff(lick_onsets) < 0) else lick_onsets
+        pos   = np.searchsorted(lick_onsets_sorted, water_onsets, side='left')
+        valid = pos < lick_onsets_sorted.size
+        water_lick_onsets = np.unique(lick_onsets_sorted[pos[valid]])
+
+    print(f'  Blue laser onsets : {len(blueLaser_onsets)}')
+    print(f'  Red laser onsets  : {len(redLaser_onsets)}')
+    print(f'  Water onsets      : {len(water_onsets)}')
+    print(f'  Airpuff onsets    : {len(airpuff_onsets)}')
 
     if len(blueLaser_onsets) == 0:
         result['error'] = 'No blue laser onsets found'
@@ -270,6 +297,73 @@ def process_session(session_name: str) -> dict:
 
     result['tagged_units']  = tagged_units.tolist()
     result['peak_channels'] = peak_channels.tolist()
+
+    # ------------------------------------------------------------------
+    # Plot aligned spikes for every event  (mirrors notebook PSTH cells)
+    # ------------------------------------------------------------------
+
+    # Blue opto  (notebook cell 24)
+    ndap.plot_all_units(
+        spikes, event, (-0.05, 0.1), plot_style='raster',
+        good_units=good_units, good_unit_ids=good_unit_ids,
+        same_system=False, params=params, bin_size_ms=5,
+        event_color='tab:cyan', event_duration=0.01, event_label='blue opto',
+        save_figure=True, save_folder=save_folder,
+    )
+    plt.close('all')
+
+    # Red opto  (notebook cell 26)
+    if redLaser_onsets.size > 0:
+        ndap.plot_all_units(
+            spikes, redLaser_onsets, (-0.5, 2), plot_style='raster',
+            good_units=good_units, good_unit_ids=good_unit_ids,
+            same_system=False, params=params, bin_size_ms=5,
+            event_color='tab:red', event_duration=0.5, event_label='red opto',
+            save_figure=True, save_folder=save_folder,
+        )
+        plt.close('all')
+    else:
+        print('  Skipping red opto plot (no onsets).')
+
+    # Water  (notebook cell 28)
+    if water_lick_onsets.size > 0:
+        ndap.plot_all_units(
+            spikes, water_lick_onsets, (-0.5, 2), plot_style='raster',
+            good_units=good_units, good_unit_ids=good_unit_ids,
+            same_system=False, params=params, bin_size_ms=5,
+            event_color='tab:cyan', event_duration=0.2, event_label='water',
+            save_figure=True, save_folder=save_folder,
+        )
+        plt.close('all')
+    else:
+        print('  Skipping water plot (no onsets).')
+
+    # Airpuff  (notebook cell 30)
+    if airpuff_onsets.size > 0:
+        ndap.plot_all_units(
+            spikes, airpuff_onsets, (-0.5, 2), plot_style='raster',
+            good_units=good_units, good_unit_ids=good_unit_ids,
+            same_system=False, params=params, bin_size_ms=5,
+            event_color='tab:gray', event_duration=0.2, event_label='airpuff',
+            save_figure=True, save_folder=save_folder,
+        )
+        plt.close('all')
+    else:
+        print('  Skipping airpuff plot (no onsets).')
+
+    # Tone
+    if tone_onsets.size > 0:
+        ndap.plot_all_units(
+            spikes, tone_onsets, (-0.5, 2), plot_style='raster',
+            good_units=good_units, good_unit_ids=good_unit_ids,
+            same_system=False, params=params, bin_size_ms=5,
+            event_color='tab:orange', event_duration=0.2, event_label='tone',
+            save_figure=True, save_folder=save_folder,
+        )
+        plt.close('all')
+    else:
+        print('  Skipping tone plot (no onsets).')
+
     return result
 
 
