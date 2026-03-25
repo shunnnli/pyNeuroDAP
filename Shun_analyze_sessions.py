@@ -223,10 +223,10 @@ def process_session(session_name: str) -> dict:
         return result
 
     # Extract onset times  (mirrors notebook: Load behavior & photometry)
-    water_onsets    = ndap.get_onset_times(water,    edge='rising',  fs=behaviorFs, min_separation=0.5) if water   is not None else np.array([])
-    tone_onsets     = ndap.get_onset_times(tone,     edge='rising',  fs=behaviorFs, min_separation=0.5) if tone    is not None else np.array([])
-    lick_onsets     = ndap.get_onset_times(lick,     edge='rising',  fs=behaviorFs, min_separation=0.5) if lick    is not None else np.array([])
-    airpuff_onsets  = ndap.get_onset_times(airpuff,  edge='rising',  fs=behaviorFs, min_separation=0.5) if airpuff is not None else np.array([])
+    water_onsets    = ndap.get_onset_times(water,    edge='rising',  fs=behaviorFs, min_separation=0.5)  if water   is not None else np.array([])
+    tone_onsets     = ndap.get_onset_times(tone,     edge='rising',  fs=behaviorFs, min_separation=0.5)  if tone    is not None else np.array([])
+    lick_onsets     = ndap.get_onset_times(lick,     edge='rising',  fs=behaviorFs, min_separation=0.05) if lick    is not None else np.array([])
+    airpuff_onsets  = ndap.get_onset_times(airpuff,  edge='rising',  fs=behaviorFs, min_separation=0.5)  if airpuff is not None else np.array([])
     blueLaser_onsets = ndap.get_onset_times(blueLaser, fs=behaviorFs, min_separation=0.5, edge='falling')
     redLaser_onsets  = ndap.get_onset_times(redLaser,  fs=behaviorFs, min_separation=1,   edge='falling') if redLaser is not None else np.array([])
 
