@@ -428,20 +428,45 @@ def process_session(session_name: str) -> dict:
 
 
     # ------------------------------------------------------------------
+    # Save blue opto aligned spikes
+    # ------------------------------------------------------------------
+    bin_size_ms = 1
+    time_range = (-0.05, 0.1)
+
+    # Align good units to the selected event
+    event_aligned = ndap.get_spikes(
+        spikes,
+        optotag_onsets,
+        time_range=time_range,
+        bin_size_ms=bin_size_ms,
+        same_system=False,
+        params=params,
+        include_units=good_units,
+    )
+    ndap.save_aligned_spikes(event_aligned, analysis_filepath, key=f'spikes_blue_opto')
+
+
+    # ------------------------------------------------------------------
     # Plot response changes to event-triggered trials
     # ------------------------------------------------------------------
     # Align spikes to a chosen event and count spikes from 0 to 1 s after onset
     if 'RANDOM' in session_name.upper():
-        event_types = [water_lick_onsets, tone_onsets, airpuff_onsets, redLaser_onsets, optotag_onsets]
-        event_names = ['water_lick', 'tone', 'airpuff', 'red_opto', 'blue_opto']
+        event_types = [water_lick_onsets, tone_onsets, airpuff_onsets, redLaser_onsets]
+        event_names = ['water_lick', 'tone', 'airpuff', 'red_opto']
     else:
-        event_types = [opto_only_onsets, tone_only_onsets, pair_onsets, water_lick_onsets, airpuff_onsets, optotag_onsets]
-        event_names = ['opto_only', 'tone_only', 'pair', 'water_lick', 'airpuff', 'blue_opto']
+        event_types = [opto_only_onsets, tone_only_onsets, pair_onsets, water_lick_onsets, airpuff_onsets]
+        event_names = ['opto_only', 'tone_only', 'pair', 'water_lick', 'airpuff']
 
     for event_times, event_name in zip(event_types, event_names):
-        bin_size_ms = 5 if event_name != 'blue_opto' else 1
-        time_range = (-1, 2) if event_name != 'blue_opto' else (-0.05, 0.1)
-        response_window_ms = (0, 1000) if event_name != 'blue_opto' else (0, 50)
+
+        # Skip empty event sets
+        if event_times is None or len(event_times) == 0:
+            print(f'  Skipping response changes for {event_name} (no events).')
+            continue
+
+        bin_size_ms = 5
+        time_range = (-1, 2)
+        response_window_ms = (0, 1000)
         xaxis = ndap.get_time_axis(time_range=time_range, bin_size_ms=bin_size_ms)
 
         # Align good units to the selected event
@@ -468,7 +493,6 @@ def process_session(session_name: str) -> dict:
         # Number of spikes in the 0-1 s window for each trial and each unit
         event_counts = response_counts.sum(axis=2)  # shape: (n_units, n_events)
         event_rates = event_counts / (response_window_ms[1] - response_window_ms[0])
-
         # Center to the average of the first five trials for each unit
         event_rates_diff = event_rates - np.mean(event_rates[:, :5], axis=1, keepdims=True)
 
@@ -493,10 +517,14 @@ def process_session(session_name: str) -> dict:
             grouped_rates.append(unit_group_means)
         event_rates_diff_grouped = np.array(grouped_rates)
 
-        # Calculate slope of event_rates_diff_grouped vs trial
-        slopes = (event_rates_diff_grouped[:, -1] - event_rates_diff_grouped[:, 0]) / (
-            (event_rates_diff_grouped.shape[1] - 1) * n_grouped_trials
-        )
+        # Calculate slope of event_rates_diff_grouped vs trial.
+        # If there is only one grouped timepoint, slope is undefined; keep as NaN.
+        if event_rates_diff_grouped.ndim != 2 or event_rates_diff_grouped.shape[1] < 2:
+            slopes = np.full(event_rates_diff_grouped.shape[0], np.nan, dtype=float)
+        else:
+            slopes = (event_rates_diff_grouped[:, -1] - event_rates_diff_grouped[:, 0]) / (
+                (event_rates_diff_grouped.shape[1] - 1) * n_grouped_trials
+            )
 
         # Compute per-unit modulation index for the same event using the aligned spikes above
         baseline_window_ms = (-1000, 0)
@@ -536,13 +564,22 @@ def process_session(session_name: str) -> dict:
         axs[0].set_title(f'Trial vs Event-triggered spikes')
 
         # Plot distribution of slope (event_rates_diff_grouped vs trial)
-        axs[1].hist(slopes, bins=30)
+        finite_slopes = slopes[np.isfinite(slopes)]
+        if finite_slopes.size > 0:
+            axs[1].hist(finite_slopes, bins=30)
+        else:
+            axs[1].text(0.5, 0.5, 'No finite slopes', ha='center', va='center', transform=axs[1].transAxes)
         axs[1].set_xlabel('Slope')
         axs[1].set_ylabel('Count')
         axs[1].set_title(f'Distribution of slope (grouped every {n_grouped_trials} trials)')
 
         # Plot distribution of modulation index
-        axs[2].hist(mod_results['mod_index'], bins=30)
+        mod_index = np.asarray(mod_results['mod_index'])
+        finite_mod_index = mod_index[np.isfinite(mod_index)]
+        if finite_mod_index.size > 0:
+            axs[2].hist(finite_mod_index, bins=30)
+        else:
+            axs[2].text(0.5, 0.5, 'No finite modulation indices', ha='center', va='center', transform=axs[2].transAxes)
         axs[2].set_xlabel('Modulation index')
         axs[2].set_ylabel('Count')
         axs[2].set_title(f'Distribution of modulation index')
@@ -560,6 +597,11 @@ def process_session(session_name: str) -> dict:
     outer_gs = fig.add_gridspec(1, n_events_plot, wspace=0.35)
 
     for col, (event_times, event_name) in enumerate(zip(event_types, event_names)):
+        # Skip empty event sets
+        if event_times is None or len(event_times) == 0:
+            print(f'  Skipping lick raster for {event_name} (no events).')
+            continue
+
         lick_aligned = ndap.get_licks(lick_onsets, event_times, time_range=(-0.5, 2), bin_size_ms=100)
 
         inner_gs = outer_gs[col].subgridspec(2, 1, height_ratios=[1, 4], hspace=0.05)
