@@ -332,7 +332,7 @@ def load_variables(filepath, key='variables', verbose=False):
         print(f"Variable group '{key}' loaded from {filepath}")
     return variables
 
-def load_session_data(filepath, lazy=True, verbose=False):
+def load_session_data(filepath, groups='all', lazy=True, verbose=False):
     """
     Load all session data from a single HDF5 file.
 
@@ -353,6 +353,17 @@ def load_session_data(filepath, lazy=True, verbose=False):
         If True, 'rate' arrays in aligned_spikes are left as h5py.Dataset
         handles and the HDF5 file is kept open. Call close_loaded() on
         session_data['aligned_spikes'] when finished.
+    groups : str or list of str
+        If 'all', load all groups. If a list of strings, load only the specified groups.
+        The groups are:
+        - metadata
+        - event_times
+        - unit_info
+        - salt_results
+        - trial_table
+        - spikes_<event>
+        - licks_<event>
+        - trials_<event>
 
     Returns
     -------
@@ -367,6 +378,14 @@ def load_session_data(filepath, lazy=True, verbose=False):
     with h5py.File(filepath, 'r') as f:
         all_keys = list(f.keys())
 
+    # Normalise the groups filter: 'all' means no filtering
+    load_all = (groups == 'all')
+    requested = set(groups) if not load_all else set()
+
+    def _want(group_name):
+        """Return True if this logical group should be loaded."""
+        return load_all or group_name in requested
+
     # --- Singleton groups ---
     _singleton_loaders = {
         'metadata':     lambda: load_variables(filepath, key='metadata', verbose=verbose),
@@ -376,36 +395,48 @@ def load_session_data(filepath, lazy=True, verbose=False):
         'trial_table':  lambda: load_dataframe(filepath, key='trial_table', verbose=verbose),
     }
     for key, loader in _singleton_loaders.items():
-        if key in all_keys:
+        if key in all_keys and _want(key):
             session_data[key] = loader()
 
     # --- spikes_<event> : lazy-loaded aligned spike dicts ---
-    spike_keys = sorted(k for k in all_keys if k.startswith('spikes_'))
-    if spike_keys:
-        f_spikes = h5py.File(filepath, 'r')   # kept open for lazy Dataset access
-        session_data['aligned_spikes'] = {
-            k[len('spikes_'):]: _load_dict_recursive(f_spikes[k], lazy=lazy)
-            for k in spike_keys
-        }
-        if verbose:
-            print(f"Aligned spikes loaded for keys: {spike_keys}")
-        session_data['aligned_spikes']['__h5file__'] = f_spikes
+    if _want('aligned_spikes'):
+        spike_keys = sorted(k for k in all_keys if k.startswith('spikes_'))
+        if spike_keys:
+            f_spikes = h5py.File(filepath, 'r')   # kept open for lazy Dataset access
+            session_data['aligned_spikes'] = {
+                k[len('spikes_'):]: _load_dict_recursive(f_spikes[k], lazy=lazy)
+                for k in spike_keys
+            }
+            if verbose:
+                print(f"Aligned spikes loaded for keys: {spike_keys}")
+            session_data['aligned_spikes']['__h5file__'] = f_spikes
 
     # --- licks_<event> : eagerly loaded lick dicts ---
-    lick_keys = sorted(k for k in all_keys if k.startswith('licks_'))
-    if lick_keys:
-        session_data['aligned_licks'] = {
-            k[len('licks_'):]: load_variables(filepath, key=k, verbose=verbose)
-            for k in lick_keys
-        }
+    if _want('aligned_licks'):
+        lick_keys = sorted(k for k in all_keys if k.startswith('licks_'))
+        if lick_keys:
+            session_data['aligned_licks'] = {
+                k[len('licks_'):]: load_variables(filepath, key=k, verbose=verbose)
+                for k in lick_keys
+            }
 
-    # --- trials_<event> : eagerly loaded trial analysis dicts ---
-    trial_keys = sorted(k for k in all_keys if k.startswith('trials_'))
-    if trial_keys:
-        session_data['trials'] = {
-            k[len('trials_'):]: load_variables(filepath, key=k, verbose=verbose)
-            for k in trial_keys
-        }
+    # --- trials_spikes_<event> : eagerly loaded trial analysis dicts ---
+    if _want('trials_spikes'):
+        trial_keys = sorted(k for k in all_keys if k.startswith('trials_spikes_'))
+        if trial_keys:
+            session_data['trials_spikes'] = {
+                k[len('trials_spikes_'):]: load_variables(filepath, key=k, verbose=verbose)
+                for k in trial_keys
+            }
+
+    # --- trials_licks_<event> : eagerly loaded trial analysis dicts ---
+    if _want('trials_licks'):
+        trial_keys = sorted(k for k in all_keys if k.startswith('trials_licks_'))
+        if trial_keys:
+            session_data['trials_licks'] = {
+                k[len('trials_licks_'):]: load_variables(filepath, key=k, verbose=verbose)
+                for k in trial_keys
+            }
 
     print(f"Analysis data loaded for session: {filepath}")
     return session_data
