@@ -293,7 +293,7 @@ def save_variables(variables_dict, filepath, key='variables'):
     print(f"Variables saved to {filepath} with key '{key}'")
     return str(filepath)
 
-def load_variables(filepath, key='variables'):
+def load_variables(filepath, key='variables', verbose=False):
     """
     Load variables from HDF5 file
     
@@ -328,43 +328,86 @@ def load_variables(filepath, key='variables'):
         for attr_name in main_group.attrs.keys():
             variables[attr_name] = main_group.attrs[attr_name]
     
-    print(f"Variables loaded from {filepath}")
+    if verbose:
+        print(f"Variable group '{key}' loaded from {filepath}")
     return variables
 
-def load_session_data(filepath):
+def load_session_data(filepath, lazy=True, verbose=False):
     """
-    Load all session data from a single HDF5 file
-    
-    Parameters:
-    - filepath: str or Path, path to HDF5 file
-    
-    Returns:
-    - session_data: dict, containing all loaded data
+    Load all session data from a single HDF5 file.
+
+    Dynamically discovers all groups and loads them by prefix:
+      - metadata       -> session_data['metadata']       (dict of scalars)
+      - event_times    -> session_data['event_times']     (dict of onset arrays)
+      - unit_info      -> session_data['unit_info']       (dict of unit arrays)
+      - salt_results   -> session_data['salt_results']    (dict)
+      - trial_table    -> session_data['trial_table']     (DataFrame)
+      - spikes_<event> -> session_data['aligned_spikes'][<event>]
+      - licks_<event>  -> session_data['aligned_licks'][<event>]
+      - trials_<event> -> session_data['trials'][<event>]
+
+    Parameters
+    ----------
+    filepath : str or Path
+    lazy     : bool
+        If True, 'rate' arrays in aligned_spikes are left as h5py.Dataset
+        handles and the HDF5 file is kept open. Call close_loaded() on
+        session_data['aligned_spikes'] when finished.
+
+    Returns
+    -------
+    session_data : dict
     """
     filepath = Path(filepath)
     if not filepath.exists():
         raise FileNotFoundError(f"File not found: {filepath}")
-    
+
     session_data = {}
-    
+
     with h5py.File(filepath, 'r') as f:
-        # Load trial table if it exists
-        if 'trial_table' in f:
-            session_data['trial_table'] = load_dataframe(filepath, key='trial_table')
-        
-        # Load event times if it exists
-        if 'event_times' in f:
-            session_data['event_times'] = load_variables(filepath, key='event_times')['event_times']
-        
-        # Load metadata if it exists
-        if 'metadata' in f:
-            session_data['metadata'] = load_variables(filepath, key='metadata')['metadata']
-        
-        # Load aligned spikes if it exists
-        if 'aligned_spikes' in f:
-            session_data['aligned_spikes'] = load_aligned_spikes(filepath)
-    
-    print(f"Session data loaded from {filepath}")
+        all_keys = list(f.keys())
+
+    # --- Singleton groups ---
+    _singleton_loaders = {
+        'metadata':     lambda: load_variables(filepath, key='metadata', verbose=verbose),
+        'event_times':  lambda: load_variables(filepath, key='event_times', verbose=verbose),
+        'unit_info':    lambda: load_variables(filepath, key='unit_info', verbose=verbose),
+        'salt_results': lambda: load_variables(filepath, key='salt_results', verbose=verbose),
+        'trial_table':  lambda: load_dataframe(filepath, key='trial_table', verbose=verbose),
+    }
+    for key, loader in _singleton_loaders.items():
+        if key in all_keys:
+            session_data[key] = loader()
+
+    # --- spikes_<event> : lazy-loaded aligned spike dicts ---
+    spike_keys = sorted(k for k in all_keys if k.startswith('spikes_'))
+    if spike_keys:
+        f_spikes = h5py.File(filepath, 'r')   # kept open for lazy Dataset access
+        session_data['aligned_spikes'] = {
+            k[len('spikes_'):]: _load_dict_recursive(f_spikes[k], lazy=lazy)
+            for k in spike_keys
+        }
+        if verbose:
+            print(f"Aligned spikes loaded for keys: {spike_keys}")
+        session_data['aligned_spikes']['__h5file__'] = f_spikes
+
+    # --- licks_<event> : eagerly loaded lick dicts ---
+    lick_keys = sorted(k for k in all_keys if k.startswith('licks_'))
+    if lick_keys:
+        session_data['aligned_licks'] = {
+            k[len('licks_'):]: load_variables(filepath, key=k, verbose=verbose)
+            for k in lick_keys
+        }
+
+    # --- trials_<event> : eagerly loaded trial analysis dicts ---
+    trial_keys = sorted(k for k in all_keys if k.startswith('trials_'))
+    if trial_keys:
+        session_data['trials'] = {
+            k[len('trials_'):]: load_variables(filepath, key=k, verbose=verbose)
+            for k in trial_keys
+        }
+
+    print(f"Analysis data loaded for session: {filepath}")
     return session_data
 
 
