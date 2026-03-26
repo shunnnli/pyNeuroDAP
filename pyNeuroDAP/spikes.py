@@ -579,6 +579,10 @@ def get_window(data, onset_time=0, window_ms=(0,100),
 
     # 0) check if bin_size_ms and original_bin_size_ms are provided
 
+    # (optional) expand data to 3 dim (for licking: original dim is n_trials x n_bins)
+    # if data.ndim == 2:
+    #     data = data[np.newaxis, :, :] # (n_trials, n_bins) -> (1, n_trials, n_bins)
+
 
     # 1) find the bin‐indices for response window
     start_ms, end_ms = window_ms

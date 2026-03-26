@@ -85,7 +85,7 @@ behaviorFs = 10000
 # ---------------------------------------------------------------------------
 # Helper: process one session
 # ---------------------------------------------------------------------------
-def process_session(session_name: str) -> dict:
+def process_session(session_name: str, plot_all_units: bool = True) -> dict:
     """
     Run QC + SALT for a single session.
 
@@ -258,7 +258,6 @@ def process_session(session_name: str) -> dict:
     # ------------------------------------------------------------------
     # Finalize event onsets
     # ------------------------------------------------------------------
-
     # Separate between pair vs unpair trials
     tone_only_onsets, opto_only_onsets, pair_onsets, _, _ = ndap.split_paired_events(
         event1_onsets=tone_onsets,
@@ -324,107 +323,107 @@ def process_session(session_name: str) -> dict:
     # ------------------------------------------------------------------
     # Plot aligned spikes for every event  (mirrors notebook PSTH cells)
     # ------------------------------------------------------------------
-
-    # Blue opto
-    ndap.plot_all_units(
-        spikes, optotag_onsets, (-0.05, 0.1), plot_style='raster',
-        good_units=good_units, good_unit_ids=good_unit_ids,
-        same_system=False, params=params, bin_size_ms=5,
-        event_color='tab:cyan', event_duration=0.01, event_label='blue_opto',
-        save_figure=True, save_folder=save_folder,
-    )
-    plt.close('all')
-
-    # Airpuff
-    if airpuff_onsets.size > 0:
+    if plot_all_units:
+        # Blue opto
         ndap.plot_all_units(
-            spikes, airpuff_onsets, (-0.5, 2), plot_style='raster',
+            spikes, optotag_onsets, (-0.05, 0.1), plot_style='raster',
             good_units=good_units, good_unit_ids=good_unit_ids,
             same_system=False, params=params, bin_size_ms=5,
-            event_color='tab:gray', event_duration=0.2, event_label='airpuff',
+            event_color='tab:cyan', event_duration=0.01, event_label='blue_opto',
             save_figure=True, save_folder=save_folder,
         )
         plt.close('all')
-    else:
-        print('  Skipping airpuff plot (no onsets).')
 
-    # Water
-    if water_lick_onsets.size > 0:
-        ndap.plot_all_units(
-            spikes, water_lick_onsets, (-0.5, 2), plot_style='raster',
-            good_units=good_units, good_unit_ids=good_unit_ids,
-            same_system=False, params=params, bin_size_ms=5,
-            event_color='tab:cyan', event_duration=0.2, event_label='water',
-            save_figure=True, save_folder=save_folder,
-        )
-        plt.close('all')
-    else:
-        print('  Skipping water plot (no onsets).')
+        # Airpuff
+        if airpuff_onsets.size > 0:
+            ndap.plot_all_units(
+                spikes, airpuff_onsets, (-0.5, 2), plot_style='raster',
+                good_units=good_units, good_unit_ids=good_unit_ids,
+                same_system=False, params=params, bin_size_ms=5,
+                event_color='tab:gray', event_duration=0.2, event_label='airpuff',
+                save_figure=True, save_folder=save_folder,
+            )
+            plt.close('all')
+        else:
+            print('  Skipping airpuff plot (no onsets).')
 
-    # Trial onset
-    if 'RANDOM' in session_name.upper():
-        # Tone
-        if tone_onsets.size > 0:
+        # Water
+        if water_lick_onsets.size > 0:
             ndap.plot_all_units(
-                spikes, tone_onsets, (-0.5, 2), plot_style='raster',
+                spikes, water_lick_onsets, (-0.5, 2), plot_style='raster',
                 good_units=good_units, good_unit_ids=good_unit_ids,
                 same_system=False, params=params, bin_size_ms=5,
-                event_color='tab:orange', event_duration=0.2, event_label='tone',
+                event_color='tab:cyan', event_duration=0.2, event_label='water',
                 save_figure=True, save_folder=save_folder,
             )
             plt.close('all')
         else:
-            print('  Skipping tone plot (no onsets).')
-        
-        # Red opto
-        if redLaser_onsets.size > 0:
-            ndap.plot_all_units(
-                spikes, redLaser_onsets, (-0.5, 2), plot_style='raster',
-                good_units=good_units, good_unit_ids=good_unit_ids,
-                same_system=False, params=params, bin_size_ms=5,
-                event_color='tab:red', event_duration=0.5, event_label='red_opto',
-                save_figure=True, save_folder=save_folder,
-            )
-            plt.close('all')
-        else:
-            print('  Skipping red opto plot (no onsets).')
-    else:
-        # Pair trials
-        if pair_onsets.size > 0:
-            ndap.plot_all_units(
-                spikes, pair_onsets, (-0.5, 2), plot_style='raster',
-                good_units=good_units, good_unit_ids=good_unit_ids,
-                same_system=False, params=params, bin_size_ms=5,
-                event_color='tab:red', event_duration=0.5, event_label='pair',
-                save_figure=True, save_folder=save_folder,
-            )
-            plt.close('all')
-        else:
-            print('  Skipping pair plot (no onsets).')
+            print('  Skipping water plot (no onsets).')
 
-        if opto_only_onsets.size > 0:
-            ndap.plot_all_units(
-                spikes, opto_only_onsets, (-0.5, 2), plot_style='raster',
-                good_units=good_units, good_unit_ids=good_unit_ids,
-                same_system=False, params=params, bin_size_ms=5,
-                event_color='tab:red', event_duration=0.5, event_label='opto_only',
-                save_figure=True, save_folder=save_folder,
-            )
-            plt.close('all')
+        # Trial onset
+        if 'RANDOM' in session_name.upper():
+            # Tone
+            if tone_onsets.size > 0:
+                ndap.plot_all_units(
+                    spikes, tone_onsets, (-0.5, 2), plot_style='raster',
+                    good_units=good_units, good_unit_ids=good_unit_ids,
+                    same_system=False, params=params, bin_size_ms=5,
+                    event_color='tab:orange', event_duration=0.2, event_label='tone',
+                    save_figure=True, save_folder=save_folder,
+                )
+                plt.close('all')
+            else:
+                print('  Skipping tone plot (no onsets).')
+            
+            # Red opto
+            if redLaser_onsets.size > 0:
+                ndap.plot_all_units(
+                    spikes, redLaser_onsets, (-0.5, 2), plot_style='raster',
+                    good_units=good_units, good_unit_ids=good_unit_ids,
+                    same_system=False, params=params, bin_size_ms=5,
+                    event_color='tab:red', event_duration=0.5, event_label='red_opto',
+                    save_figure=True, save_folder=save_folder,
+                )
+                plt.close('all')
+            else:
+                print('  Skipping red opto plot (no onsets).')
         else:
-            print('  Skipping opto only plot (no onsets).')
+            # Pair trials
+            if pair_onsets.size > 0:
+                ndap.plot_all_units(
+                    spikes, pair_onsets, (-0.5, 2), plot_style='raster',
+                    good_units=good_units, good_unit_ids=good_unit_ids,
+                    same_system=False, params=params, bin_size_ms=5,
+                    event_color='tab:red', event_duration=0.5, event_label='pair',
+                    save_figure=True, save_folder=save_folder,
+                )
+                plt.close('all')
+            else:
+                print('  Skipping pair plot (no onsets).')
 
-        if tone_only_onsets.size > 0:
-            ndap.plot_all_units(
-                spikes, tone_only_onsets, (-0.5, 2), plot_style='raster',
-                good_units=good_units, good_unit_ids=good_unit_ids,
-                same_system=False, params=params, bin_size_ms=5,
-                event_color='tab:orange', event_duration=0.2, event_label='tone_only',
-                save_figure=True, save_folder=save_folder,
-            )
-            plt.close('all')
-        else:
-            print('  Skipping tone only plot (no onsets).')
+            if opto_only_onsets.size > 0:
+                ndap.plot_all_units(
+                    spikes, opto_only_onsets, (-0.5, 2), plot_style='raster',
+                    good_units=good_units, good_unit_ids=good_unit_ids,
+                    same_system=False, params=params, bin_size_ms=5,
+                    event_color='tab:red', event_duration=0.5, event_label='opto_only',
+                    save_figure=True, save_folder=save_folder,
+                )
+                plt.close('all')
+            else:
+                print('  Skipping opto only plot (no onsets).')
+
+            if tone_only_onsets.size > 0:
+                ndap.plot_all_units(
+                    spikes, tone_only_onsets, (-0.5, 2), plot_style='raster',
+                    good_units=good_units, good_unit_ids=good_unit_ids,
+                    same_system=False, params=params, bin_size_ms=5,
+                    event_color='tab:orange', event_duration=0.2, event_label='tone_only',
+                    save_figure=True, save_folder=save_folder,
+                )
+                plt.close('all')
+            else:
+                print('  Skipping tone only plot (no onsets).')
 
 
     # ------------------------------------------------------------------
@@ -453,6 +452,7 @@ def process_session(session_name: str) -> dict:
     time_range = (-1, 2)
     response_window_ms = (0, 1000)
     xaxis = ndap.get_time_axis(time_range=time_range, bin_size_ms=bin_size_ms)
+    n_grouped_trials = 10
 
     # Align spikes to a chosen event and count spikes from 0 to 1 s after onset
     if 'RANDOM' in session_name.upper():
@@ -497,7 +497,6 @@ def process_session(session_name: str) -> dict:
         event_rates_diff = event_rates - np.mean(event_rates[:, :5], axis=1, keepdims=True)
 
         # Calculate average event rate for each unit every n_grouped_trials (e.g. 5)
-        n_grouped_trials = 10
         grouped_rates = []
         for unit_rates in event_rates_diff:
             unit_group_means = []
@@ -596,6 +595,7 @@ def process_session(session_name: str) -> dict:
     time_range = (-1, 2)
     response_window_ms = (0, 1000)
     xaxis = ndap.get_time_axis(time_range=time_range, bin_size_ms=bin_size_ms)
+    n_grouped_trials = 10
     
     n_events_plot = len(event_types)
     fig = plt.figure(figsize=(5 * n_events_plot, 10))
@@ -644,10 +644,14 @@ def process_session(session_name: str) -> dict:
             continue
         
         lick_aligned = ndap.get_licks(lick_onsets, event_times, time_range=time_range, bin_size_ms=bin_size_ms)
+        # Add new dimension to lick_aligned
+        lick_aligned['count'] = lick_aligned['count'][np.newaxis, :, :]
+        lick_aligned['rate'] = lick_aligned['rate'][np.newaxis, :, :]
+
         #-------------------------------------------------
         # Get trial responses for each event similar to spikes
         #-------------------------------------------------
-        lick_aligned = ndap.get_window(
+        lick_responses = ndap.get_window(
             lick_aligned['count'],
             onset_time=0,
             window_ms=response_window_ms,
@@ -656,13 +660,12 @@ def process_session(session_name: str) -> dict:
         )
 
         # Number of spikes in the 0-1 s window for each trial and each unit
-        lick_counts = lick_aligned.sum(axis=2)  # shape: (n_units, n_events)
+        lick_counts = lick_responses.sum(axis=2)  # shape: (n_units, n_events)
         lick_rates = lick_counts / (response_window_ms[1] - response_window_ms[0])
         # Center to the average of the first five trials for each unit
         lick_rates_diff = lick_rates - np.mean(lick_rates[:, :5], axis=1, keepdims=True)
 
         # Calculate average event rate for each unit every n_grouped_trials (e.g. 5)
-        n_grouped_trials = 10
         grouped_rates = []
         for unit_rates in lick_rates_diff:
             unit_group_means = []
@@ -717,12 +720,11 @@ def process_session(session_name: str) -> dict:
         fig, axs = plt.subplots(1, 3, figsize=(20, 8))
 
         # Plot grouped event rates (averaged every n_grouped_trials)
-        for i, unit_id in enumerate(good_unit_ids):
-            axs[0].plot(
-                np.arange(lick_rates_diff_grouped.shape[1]) * n_grouped_trials,
-                lick_rates_diff_grouped[i],
-                marker='o',
-            )
+        axs[0].plot(
+            np.arange(lick_rates_diff_grouped.shape[1]) * n_grouped_trials,
+            lick_rates_diff_grouped[0],
+            marker='o',
+        )
         axs[0].set_xlabel(f'Trial (grouped every {n_grouped_trials})')
         axs[0].set_ylabel(r'$\Delta$ Lick rate (Hz)')
         axs[0].set_title(f'Trial vs Event-triggered licks')
@@ -806,7 +808,7 @@ def process_session(session_name: str) -> dict:
 # ---------------------------------------------------------------------------
 all_results = []
 for session_name in all_sessions:
-    res = process_session(session_name)
+    res = process_session(session_name, plot_all_units=False)
     all_results.append(res)
 
 # ---------------------------------------------------------------------------
