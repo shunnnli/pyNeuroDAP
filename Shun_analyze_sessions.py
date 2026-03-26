@@ -42,21 +42,21 @@ import pyNeuroDAP as ndap
 # ---------------------------------------------------------------------------
 all_sessions = [
     '20251202-SL412-Random1_g0',
-    '20251203-SL412-Random2_g0',
-    '20251205-SL412-Random3_g0',
-    '20251206-SL412-Random4_g0',
-    '20251207-SL412-Reward1_g0',
-    '20251208-SL412-Reward2_g0',
-    '20251209-SL412-Reward3_g0',
-    '20251210-SL412-Reward4_g0',
-    '20251211-SL412-Punish1_g0',
-    '20251212-SL412-Punish2_g0',
-    '20251213-SL412-Punish3_g0',
-    '20251214-SL412-Punish4_g0',
-    '20251215-SL412-Reward5_g0',
-    '20251216-SL412-Punish5_g0',
-    '20251217-SL412-Reward6_g0',
-    '20251218-SL412-Punish6_g0',
+#     '20251203-SL412-Random2_g0',
+#     '20251205-SL412-Random3_g0',
+#     '20251206-SL412-Random4_g0',
+#     '20251207-SL412-Reward1_g0',
+#     '20251208-SL412-Reward2_g0',
+#     '20251209-SL412-Reward3_g0',
+#     '20251210-SL412-Reward4_g0',
+#     '20251211-SL412-Punish1_g0',
+#     '20251212-SL412-Punish2_g0',
+#     '20251213-SL412-Punish3_g0',
+#     '20251214-SL412-Punish4_g0',
+#     '20251215-SL412-Reward5_g0',
+#     '20251216-SL412-Punish5_g0',
+#     '20251217-SL412-Reward6_g0',
+#     '20251218-SL412-Punish6_g0',
 ]
 
 # ---------------------------------------------------------------------------
@@ -235,7 +235,7 @@ def process_session(session_name: str) -> dict:
     #   For random1, redLaser_onsets is 500ms earlier than calculation
     # ------------------------------------------------------------------
     if 'RANDOM1' in session_name.upper():
-        redLaser_onsets = redLaser_onsets - 0.5
+        redLaser_onsets = redLaser_onsets - int(0.4*behaviorFs)
 
 
     # ------------------------------------------------------------------
@@ -330,7 +330,7 @@ def process_session(session_name: str) -> dict:
         spikes, optotag_onsets, (-0.05, 0.1), plot_style='raster',
         good_units=good_units, good_unit_ids=good_unit_ids,
         same_system=False, params=params, bin_size_ms=5,
-        event_color='tab:cyan', event_duration=0.01, event_label='blue opto',
+        event_color='tab:cyan', event_duration=0.01, event_label='blue_opto',
         save_figure=True, save_folder=save_folder,
     )
     plt.close('all')
@@ -382,7 +382,7 @@ def process_session(session_name: str) -> dict:
                 spikes, redLaser_onsets, (-0.5, 2), plot_style='raster',
                 good_units=good_units, good_unit_ids=good_unit_ids,
                 same_system=False, params=params, bin_size_ms=5,
-                event_color='tab:red', event_duration=0.5, event_label='red opto',
+                event_color='tab:red', event_duration=0.5, event_label='red_opto',
                 save_figure=True, save_folder=save_folder,
             )
             plt.close('all')
@@ -395,7 +395,7 @@ def process_session(session_name: str) -> dict:
                 spikes, pair_onsets, (-0.5, 2), plot_style='raster',
                 good_units=good_units, good_unit_ids=good_unit_ids,
                 same_system=False, params=params, bin_size_ms=5,
-                event_color='tab:red', event_duration=0.5, event_label='red opto',
+                event_color='tab:red', event_duration=0.5, event_label='pair',
                 save_figure=True, save_folder=save_folder,
             )
             plt.close('all')
@@ -407,7 +407,7 @@ def process_session(session_name: str) -> dict:
                 spikes, opto_only_onsets, (-0.5, 2), plot_style='raster',
                 good_units=good_units, good_unit_ids=good_unit_ids,
                 same_system=False, params=params, bin_size_ms=5,
-                event_color='tab:red', event_duration=0.5, event_label='red opto',
+                event_color='tab:red', event_duration=0.5, event_label='opto_only',
                 save_figure=True, save_folder=save_folder,
             )
             plt.close('all')
@@ -419,7 +419,7 @@ def process_session(session_name: str) -> dict:
                 spikes, tone_only_onsets, (-0.5, 2), plot_style='raster',
                 good_units=good_units, good_unit_ids=good_unit_ids,
                 same_system=False, params=params, bin_size_ms=5,
-                event_color='tab:orange', event_duration=0.2, event_label='tone',
+                event_color='tab:orange', event_duration=0.2, event_label='tone_only',
                 save_figure=True, save_folder=save_folder,
             )
             plt.close('all')
