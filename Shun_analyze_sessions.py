@@ -553,6 +553,41 @@ def process_session(session_name: str) -> dict:
 
 
     # ------------------------------------------------------------------
+    # Plot lick raster for all events (one figure, one column per event)
+    # ------------------------------------------------------------------
+    n_events_plot = len(event_types)
+    fig = plt.figure(figsize=(5 * n_events_plot, 10))
+    outer_gs = fig.add_gridspec(1, n_events_plot, wspace=0.35)
+
+    for col, (event_times, event_name) in enumerate(zip(event_types, event_names)):
+        lick_aligned = ndap.get_licks(lick_onsets, event_times, time_range=(-0.5, 2), bin_size_ms=100)
+
+        inner_gs = outer_gs[col].subgridspec(2, 1, height_ratios=[1, 4], hspace=0.05)
+        ax_rate   = fig.add_subplot(inner_gs[0])
+        ax_raster = fig.add_subplot(inner_gs[1], sharex=ax_rate)
+
+        ndap.plot_sem(lick_aligned['rate'], lick_aligned['xaxis'],
+                      plot_individual=False, color='tab:green', ax=ax_rate)
+        ax_rate.set_ylabel('Lick rate (Hz)' if col == 0 else '')
+        ax_rate.set_title(event_name)
+        ax_rate.tick_params(axis='x', labelbottom=False)
+        ax_rate.spines['top'].set_visible(False)
+        ax_rate.spines['right'].set_visible(False)
+
+        ndap.plot_raster(lick_aligned['times'], lick_aligned['xaxis'],
+                         color='tab:green', ax=ax_raster)
+        ax_raster.set_xlabel('Time (s)')
+        ax_raster.set_ylabel('Trial' if col == 0 else '')
+        ax_raster.spines['top'].set_visible(False)
+        ax_raster.spines['right'].set_visible(False)
+
+        # Save lick aligned to h5
+        ndap.save_variables(lick_aligned, analysis_filepath, key=f'licks_{event_name}')
+
+    plt.savefig(os.path.join(save_folder, 'lick_raster_all_events.pdf'), dpi=300, bbox_inches='tight')
+    plt.close('all')
+
+    # ------------------------------------------------------------------
     # Save analysis to HDF5  (analysis-{session_name}.h5)
     # ------------------------------------------------------------------
     print(f'  Saving analysis to: {analysis_filepath}')
