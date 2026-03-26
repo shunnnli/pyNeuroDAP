@@ -449,6 +449,11 @@ def process_session(session_name: str) -> dict:
     # ------------------------------------------------------------------
     # Plot response changes to event-triggered trials
     # ------------------------------------------------------------------
+    bin_size_ms = 5
+    time_range = (-1, 2)
+    response_window_ms = (0, 1000)
+    xaxis = ndap.get_time_axis(time_range=time_range, bin_size_ms=bin_size_ms)
+
     # Align spikes to a chosen event and count spikes from 0 to 1 s after onset
     if 'RANDOM' in session_name.upper():
         event_types = [water_lick_onsets, tone_onsets, airpuff_onsets, redLaser_onsets]
@@ -463,11 +468,6 @@ def process_session(session_name: str) -> dict:
         if event_times is None or len(event_times) == 0:
             print(f'  Skipping response changes for {event_name} (no events).')
             continue
-
-        bin_size_ms = 5
-        time_range = (-1, 2)
-        response_window_ms = (0, 1000)
-        xaxis = ndap.get_time_axis(time_range=time_range, bin_size_ms=bin_size_ms)
 
         # Align good units to the selected event
         event_aligned = ndap.get_spikes(
@@ -592,6 +592,11 @@ def process_session(session_name: str) -> dict:
     # ------------------------------------------------------------------
     # Plot lick raster for all events (one figure, one column per event)
     # ------------------------------------------------------------------
+    bin_size_ms = 100
+    time_range = (-1, 2)
+    response_window_ms = (0, 1000)
+    xaxis = ndap.get_time_axis(time_range=time_range, bin_size_ms=bin_size_ms)
+    
     n_events_plot = len(event_types)
     fig = plt.figure(figsize=(5 * n_events_plot, 10))
     outer_gs = fig.add_gridspec(1, n_events_plot, wspace=0.35)
@@ -602,8 +607,12 @@ def process_session(session_name: str) -> dict:
             print(f'  Skipping lick raster for {event_name} (no events).')
             continue
 
-        lick_aligned = ndap.get_licks(lick_onsets, event_times, time_range=(-0.5, 2), bin_size_ms=100)
+        lick_aligned = ndap.get_licks(lick_onsets, event_times, time_range=time_range, bin_size_ms=bin_size_ms)
+        ndap.save_variables(lick_aligned, analysis_filepath, key=f'licks_{event_name}')
 
+        #-------------------------------------------------
+        # Plot lick rate and raster
+        #-------------------------------------------------
         inner_gs = outer_gs[col].subgridspec(2, 1, height_ratios=[1, 4], hspace=0.05)
         ax_rate   = fig.add_subplot(inner_gs[0])
         ax_raster = fig.add_subplot(inner_gs[1], sharex=ax_rate)
@@ -623,11 +632,125 @@ def process_session(session_name: str) -> dict:
         ax_raster.spines['top'].set_visible(False)
         ax_raster.spines['right'].set_visible(False)
 
-        # Save lick aligned to h5
-        ndap.save_variables(lick_aligned, analysis_filepath, key=f'licks_{event_name}')
-
     plt.savefig(os.path.join(save_folder, 'lick_raster_all_events.pdf'), dpi=300, bbox_inches='tight')
     plt.close('all')
+
+    #-------------------------------------------------
+    # Plot trial responses like the same for spikes
+    #-------------------------------------------------
+    for event_times, event_name in zip(event_types, event_names):
+        if event_times is None or len(event_times) == 0:
+            print(f'  Skipping trial responses for {event_name} (no events).')
+            continue
+        
+        lick_aligned = ndap.get_licks(lick_onsets, event_times, time_range=time_range, bin_size_ms=bin_size_ms)
+        #-------------------------------------------------
+        # Get trial responses for each event similar to spikes
+        #-------------------------------------------------
+        lick_aligned = ndap.get_window(
+            lick_aligned['count'],
+            onset_time=0,
+            window_ms=response_window_ms,
+            xaxis=xaxis,
+            bin_size_ms=bin_size_ms,
+        )
+
+        # Number of spikes in the 0-1 s window for each trial and each unit
+        lick_counts = lick_aligned.sum(axis=2)  # shape: (n_units, n_events)
+        lick_rates = lick_counts / (response_window_ms[1] - response_window_ms[0])
+        # Center to the average of the first five trials for each unit
+        lick_rates_diff = lick_rates - np.mean(lick_rates[:, :5], axis=1, keepdims=True)
+
+        # Calculate average event rate for each unit every n_grouped_trials (e.g. 5)
+        n_grouped_trials = 10
+        grouped_rates = []
+        for unit_rates in lick_rates_diff:
+            unit_group_means = []
+            n_events = len(unit_rates)
+
+            for start in range(0, n_events, n_grouped_trials):
+                end = start + n_grouped_trials
+                # If this is the last full group and there are leftover trials after it,
+                # merge the leftovers into this final group
+                if end >= n_events or (n_events - end) < n_grouped_trials:
+                    unit_group_means.append(unit_rates[start:].mean())
+                    break
+                else:
+                    unit_group_means.append(unit_rates[start:end].mean())
+
+            grouped_rates.append(unit_group_means)
+        lick_rates_diff_grouped = np.array(grouped_rates)
+
+        # Calculate slope of lick_rates_diff_grouped vs trial.
+        # If there is only one grouped timepoint, slope is undefined; keep as NaN.
+        if lick_rates_diff_grouped.ndim != 2 or lick_rates_diff_grouped.shape[1] < 2:
+            slopes = np.full(lick_rates_diff_grouped.shape[0], np.nan, dtype=float)
+        else:
+            slopes = (lick_rates_diff_grouped[:, -1] - lick_rates_diff_grouped[:, 0]) / (
+                (lick_rates_diff_grouped.shape[1] - 1) * n_grouped_trials
+            )
+
+        # Compute per-unit modulation index for the same event using the aligned spikes above
+        baseline_window_ms = (-1000, 0)
+        response_window_ms = (0, 1000)
+
+        mod_results = ndap.get_event_modulation(
+            lick_aligned,
+            baseline_window=baseline_window_ms,
+            response_window=response_window_ms,
+            mod_type='norm',
+            test='wilcoxon',
+            alpha=0.05,
+        )
+
+        # Save results to h5
+        ndap.save_variables({
+            'lick_counts': lick_counts,
+            'lick_rates': lick_rates,
+            'lick_rates_diff': lick_rates_diff,
+            'lick_rates_diff_grouped': lick_rates_diff_grouped,
+            'slopes': slopes,
+            'mod_results': mod_results,
+        }, analysis_filepath, key=f'trials_{event_name}')
+
+        # Plot trial responses like the same for spikes
+        fig, axs = plt.subplots(1, 3, figsize=(20, 8))
+
+        # Plot grouped event rates (averaged every n_grouped_trials)
+        for i, unit_id in enumerate(good_unit_ids):
+            axs[0].plot(
+                np.arange(lick_rates_diff_grouped.shape[1]) * n_grouped_trials,
+                lick_rates_diff_grouped[i],
+                marker='o',
+            )
+        axs[0].set_xlabel(f'Trial (grouped every {n_grouped_trials})')
+        axs[0].set_ylabel(r'$\Delta$ Lick rate (Hz)')
+        axs[0].set_title(f'Trial vs Event-triggered licks')
+
+        # Plot distribution of slope (lick_rates_diff_grouped vs trial)
+        finite_slopes = slopes[np.isfinite(slopes)]
+        if finite_slopes.size > 0:
+            axs[1].hist(finite_slopes, bins=30)
+        else:
+            axs[1].text(0.5, 0.5, 'No finite slopes', ha='center', va='center', transform=axs[1].transAxes)
+        axs[1].set_xlabel('Slope')
+        axs[1].set_ylabel('Count')
+        axs[1].set_title(f'Distribution of slope (grouped every {n_grouped_trials} trials)')
+
+        # Plot distribution of modulation index
+        mod_index = np.asarray(mod_results['mod_index'])
+        finite_mod_index = mod_index[np.isfinite(mod_index)]
+        if finite_mod_index.size > 0:
+            axs[2].hist(finite_mod_index, bins=30)
+        else:
+            axs[2].text(0.5, 0.5, 'No finite modulation indices', ha='center', va='center', transform=axs[2].transAxes)
+        axs[2].set_xlabel('Modulation index')
+        axs[2].set_ylabel('Count')
+        axs[2].set_title(f'Distribution of modulation index')
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_folder, f'trials_{event_name}.pdf'), dpi=300, bbox_inches='tight')
+        plt.close('all')
 
     # ------------------------------------------------------------------
     # Save analysis to HDF5  (analysis-{session_name}.h5)
