@@ -546,7 +546,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
             'event_rates_diff_grouped': event_rates_diff_grouped,
             'slopes': slopes,
             'mod_results': mod_results,
-        }, analysis_filepath, key=f'trials_{event_name}')
+        }, analysis_filepath, key=f'trials_spikes_{event_name}')
 
         # Plot trial vs normalized spikes for each unit, with x-axis as individual trial
         fig, axs = plt.subplots(1, 3, figsize=(20, 8))
@@ -584,7 +584,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
         axs[2].set_title(f'Distribution of modulation index')
 
         plt.tight_layout()
-        plt.savefig(os.path.join(save_folder, f'trials_{event_name}.pdf'), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(save_folder, f'trials_spikes_{event_name}.pdf'), dpi=300, bbox_inches='tight')
         plt.close('all')
 
 
@@ -714,7 +714,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
             'lick_rates_diff_grouped': lick_rates_diff_grouped,
             'slopes': slopes,
             'mod_results': mod_results,
-        }, analysis_filepath, key=f'trials_{event_name}')
+        }, analysis_filepath, key=f'trials_licks_{event_name}')
 
         # Plot trial responses like the same for spikes
         fig, axs = plt.subplots(1, 3, figsize=(20, 8))
@@ -751,7 +751,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
         axs[2].set_title(f'Distribution of modulation index')
 
         plt.tight_layout()
-        plt.savefig(os.path.join(save_folder, f'trials_{event_name}.pdf'), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(save_folder, f'trials_licks_{event_name}.pdf'), dpi=300, bbox_inches='tight')
         plt.close('all')
 
     # ------------------------------------------------------------------
