@@ -332,7 +332,7 @@ def load_variables(filepath, key='variables', verbose=False):
         print(f"Variable group '{key}' loaded from {filepath}")
     return variables
 
-def load_session_data(filepath, groups='all', lazy=True, verbose=False):
+def load_session_data(filepath, groups='all', lazy=False, verbose=False):
     """
     Load all session data from a single HDF5 file.
 
@@ -380,11 +380,10 @@ def load_session_data(filepath, groups='all', lazy=True, verbose=False):
 
     # Normalise the groups filter: 'all' means no filtering
     load_all = (groups == 'all')
-    requested = set(groups) if not load_all else set()
 
     def _want(group_name):
         """Return True if this logical group should be loaded."""
-        return load_all or group_name in requested
+        return load_all or group_name in groups
 
     # --- Singleton groups ---
     _singleton_loaders = {
