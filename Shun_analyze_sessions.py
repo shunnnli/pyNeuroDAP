@@ -547,7 +547,7 @@ def process_session(session_name: str) -> dict:
             'event_rates_diff_grouped': event_rates_diff_grouped,
             'slopes': slopes,
             'mod_results': mod_results,
-        }, analysis_filepath, key=f'response_changes_{event_name}')
+        }, analysis_filepath, key=f'trials_{event_name}')
 
         # Plot trial vs normalized spikes for each unit, with x-axis as individual trial
         fig, axs = plt.subplots(1, 3, figsize=(20, 8))
@@ -585,7 +585,7 @@ def process_session(session_name: str) -> dict:
         axs[2].set_title(f'Distribution of modulation index')
 
         plt.tight_layout()
-        plt.savefig(os.path.join(save_folder, f'response_changes_{event_name}.pdf'), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(save_folder, f'trials_{event_name}.pdf'), dpi=300, bbox_inches='tight')
         plt.close('all')
 
 
@@ -644,7 +644,7 @@ def process_session(session_name: str) -> dict:
         'recording_location': 'LHb',
         'session_type': session_type,
         'session_date': session_date,
-    }, analysis_filepath, key='session_info')
+    }, analysis_filepath, key='metadata')
 
     # Event onset times (seconds)
     ndap.save_variables({
@@ -659,7 +659,7 @@ def process_session(session_name: str) -> dict:
         'tone_only_onsets':  tone_only_onsets,
         'opto_only_onsets':  opto_only_onsets,
         'pair_onsets':       pair_onsets,
-    }, analysis_filepath, key='event_onsets')
+    }, analysis_filepath, key='event_times')
 
     # Unit info
     ndap.save_variables({
