@@ -584,7 +584,11 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
         axs[1,0].set_title(f'Trial vs Modulation index')
 
         # Plot distribution of slope (event_rates_diff_grouped vs trial)
-        axs[1,1].hist(mod_index_slopes, bins=30)
+        finite_slopes = mod_index_slopes[np.isfinite(mod_index_slopes)]
+        if finite_slopes.size > 0:
+            axs[1,1].hist(finite_slopes, bins=30)
+        else:
+            axs[1,1].text(0.5, 0.5, 'No finite slopes', ha='center', va='center', transform=axs[1,1].transAxes)
         axs[1,1].set_xlabel('Slope')
         axs[1,1].set_ylabel('Count')
         axs[1,1].set_title(f'Distribution of slope (grouped every {n_grouped_trials} trials)')
