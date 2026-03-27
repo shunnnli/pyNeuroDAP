@@ -706,7 +706,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
             test='wilcoxon',
             alpha=0.05,
         )
-
+        
         # Save results to h5
         ndap.save_variables({
             'lick_counts': lick_counts,
@@ -810,7 +810,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
 # ---------------------------------------------------------------------------
 all_results = []
 for session_name in all_sessions:
-    res = process_session(session_name, plot_all_units=True)
+    res = process_session(session_name, plot_all_units=False)
     all_results.append(res)
 
 # ---------------------------------------------------------------------------

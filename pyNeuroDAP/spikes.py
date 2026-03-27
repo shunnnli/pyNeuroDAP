@@ -608,8 +608,28 @@ def get_window(data, onset_time=0, window_ms=(0,100),
 
 
 
-def get_mod_index(data0, data1, type='norm'):
+def get_mod_index(data0, data1, type='norm', return_trials=False):
+    """
+    Compute modulation index between two windows.
 
+    Parameters
+    ----------
+    data0 : ndarray, shape (n_units, n_events, n_bins)  – response window
+    data1 : ndarray, shape (n_units, n_events, n_bins)  – baseline window
+    type  : str  – 'norm' | 'cd' | 'd'
+    return_trials : bool
+        Only used when type='norm'. If True, also return the per-trial
+        modulation index of shape (n_units, n_events) alongside the
+        overall (n_units,) index as a tuple ``(mod_index, mod_index_per_trial)``.
+
+    Returns
+    -------
+    mod_index : ndarray, shape (n_units,)
+        [type='norm', return_trials=False]  overall modulation index
+    (mod_index, mod_index_per_trial) : tuple
+        [type='norm', return_trials=True]
+        mod_index_per_trial has shape (n_units, n_events)
+    """
     if data0.shape[0] != data1.shape[0] or data0.shape[2] != data1.shape[2]:
         raise ValueError("data0 and data1 must have the same number of neurons (axis 0) and bins (axis 2), but got {} and {}".format(data0.shape, data1.shape))
 
@@ -619,11 +639,17 @@ def get_mod_index(data0, data1, type='norm'):
 
     # 1. index = (Fon-Foff)/(Fon+Foff)
     if type == 'norm':
-        # compute mean rates in that window
-        mean_data0 = np.mean(data0, axis=(1,2))  # shape (n_neurons,)
-        mean_data1 = np.mean(data1, axis=(1,2))
-        # get mod index
+        # overall: average over both trials and bins -> (n_units,)
+        mean_data0 = np.mean(data0, axis=(1, 2))
+        mean_data1 = np.mean(data1, axis=(1, 2))
         mod_index = (mean_data0 - mean_data1) / (mean_data0 + mean_data1 + 1e-12)
+
+        if return_trials:
+            # per-trial: average over bins only -> (n_units, n_events)
+            trial_data0 = np.nanmean(data0, axis=2)
+            trial_data1 = np.nanmean(data1, axis=2)
+            mod_index_per_trial = (trial_data0 - trial_data1) / (trial_data0 + trial_data1 + 1e-12)
+            return mod_index, mod_index_per_trial
 
         return mod_index
 
@@ -845,15 +871,18 @@ def get_event_modulation(aligned,
     Returns
     -------
     results : dict
-        ``mod_index``      – (n_units,) modulation index from *get_mod_index*
-        ``p_values``       – (n_units,) statistical p-values
-        ``effect_size``    – (n_units,) paired Cohen's d
-        ``baseline_rates`` – (n_units,) mean baseline firing rate (Hz)
-        ``response_rates`` – (n_units,) mean response firing rate (Hz)
-        ``significant``    – (n_units,) boolean mask at *alpha*
-        ``direction``      – (n_units,) +1 excited, −1 inhibited, 0 n.s.
-        ``units``          – unit IDs analysed
-        ``params``         – parameters used
+        ``mod_index``             – (n_units,)          overall modulation index
+        ``mod_index_per_trial``   – (n_units, n_events) per-trial modulation index
+        ``p_values``              – (n_units,)          statistical p-values
+        ``effect_size``           – (n_units,)          paired Cohen's d
+        ``baseline_rates``        – (n_units,)          mean baseline firing rate (Hz)
+        ``response_rates``        – (n_units,)          mean response firing rate (Hz)
+        ``baseline_rates_per_trial`` – (n_units, n_events) per-trial baseline rate
+        ``response_rates_per_trial`` – (n_units, n_events) per-trial response rate
+        ``significant``           – (n_units,)          boolean mask at *alpha*
+        ``direction``             – (n_units,)          +1 excited, −1 inhibited, 0 n.s.
+        ``units``                 – unit IDs analysed
+        ``params``                – parameters used
     """
     from scipy import stats as _stats
 
@@ -881,21 +910,26 @@ def get_event_modulation(aligned,
     rp_data = rate[:, :, rp_s:rp_e]
 
     # --- Modulation index via get_mod_index ---
-    # get_mod_index expects matching bin counts on axis 2, so we
-    # average each window down to 1 bin first, keeping the trial axis.
-    bl_collapsed = np.nanmean(bl_data, axis=2, keepdims=True)  # (units, events, 1)
+    # Average each window down to 1 bin first to keep the trial axis intact.
+    bl_collapsed = np.nanmean(bl_data, axis=2, keepdims=True)  # (n_units, n_events, 1)
     rp_collapsed = np.nanmean(rp_data, axis=2, keepdims=True)
-    mod_index = get_mod_index(rp_collapsed, bl_collapsed, type=mod_type)
+    mod_index, mod_index_per_trial = get_mod_index(
+        rp_collapsed, bl_collapsed, type=mod_type, return_trials=True
+    )
 
-    # --- Per-unit statistics (p-value, effect size) ---
-    p_values = np.full(n_units, np.nan)
+    # --- Per-trial rates: (n_units, n_events) ---
+    baseline_rates_per_trial = np.nanmean(bl_data, axis=2)  # (n_units, n_events)
+    response_rates_per_trial = np.nanmean(rp_data, axis=2)
+
+    # --- Per-unit summary statistics ---
+    p_values    = np.full(n_units, np.nan)
     effect_size = np.full(n_units, np.nan)
     baseline_rates = np.full(n_units, np.nan)
     response_rates = np.full(n_units, np.nan)
 
     for u in range(n_units):
-        bl_trial = np.nanmean(bl_data[u], axis=1)   # (n_events,)
-        rp_trial = np.nanmean(rp_data[u], axis=1)
+        bl_trial = baseline_rates_per_trial[u]   # (n_events,)
+        rp_trial = response_rates_per_trial[u]
 
         valid = ~(np.isnan(bl_trial) | np.isnan(rp_trial))
         bl = bl_trial[valid]
@@ -912,11 +946,9 @@ def get_event_modulation(aligned,
                 if np.all(diff == 0):
                     p_values[u] = 1.0
                 else:
-                    _, p_values[u] = _stats.wilcoxon(rp, bl,
-                                                     alternative='two-sided')
+                    _, p_values[u] = _stats.wilcoxon(rp, bl, alternative='two-sided')
             elif test == 'ranksum':
-                _, p_values[u] = _stats.mannwhitneyu(rp, bl,
-                                                     alternative='two-sided')
+                _, p_values[u] = _stats.mannwhitneyu(rp, bl, alternative='two-sided')
             elif test == 'ttest':
                 _, p_values[u] = _stats.ttest_rel(rp, bl)
             else:
@@ -934,20 +966,23 @@ def get_event_modulation(aligned,
     direction[significant & (mod_index < 0)] = -1
 
     return {
-        'mod_index': mod_index,
-        'p_values': p_values,
-        'effect_size': effect_size,
-        'baseline_rates': baseline_rates,
-        'response_rates': response_rates,
-        'significant': significant,
-        'direction': direction,
-        'units': ap['units'],
+        'mod_index':                mod_index,
+        'mod_index_per_trial':      mod_index_per_trial,
+        'p_values':                 p_values,
+        'effect_size':              effect_size,
+        'baseline_rates':           baseline_rates,
+        'response_rates':           response_rates,
+        'baseline_rates_per_trial': baseline_rates_per_trial,
+        'response_rates_per_trial': response_rates_per_trial,
+        'significant':              significant,
+        'direction':                direction,
+        'units':                    ap['units'],
         'params': {
             'baseline_window_ms': baseline_window,
             'response_window_ms': response_window,
-            'mod_type': mod_type,
-            'test': test,
-            'alpha': alpha,
+            'mod_type':  mod_type,
+            'test':      test,
+            'alpha':     alpha,
         },
     }
 
