@@ -42,21 +42,21 @@ import pyNeuroDAP as ndap
 # ---------------------------------------------------------------------------
 all_sessions = [
     '20251202-SL412-Random1_g0',
-    '20251203-SL412-Random2_g0',
-    '20251205-SL412-Random3_g0',
-    '20251206-SL412-Random4_g0',
-    '20251207-SL412-Reward1_g0',
-    '20251208-SL412-Reward2_g0',
-    '20251209-SL412-Reward3_g0',
-    '20251210-SL412-Reward4_g0',
-    '20251211-SL412-Punish1_g0',
-    '20251212-SL412-Punish2_g0',
-    '20251213-SL412-Punish3_g0',
-    '20251214-SL412-Punish4_g0',
-    '20251215-SL412-Reward5_g0',
-    '20251216-SL412-Punish5_g0',
-    '20251217-SL412-Reward6_g0',
-    '20251218-SL412-Punish6_g0',
+    # '20251203-SL412-Random2_g0',
+    # '20251205-SL412-Random3_g0',
+    # '20251206-SL412-Random4_g0',
+    # '20251207-SL412-Reward1_g0',
+    # '20251208-SL412-Reward2_g0',
+    # '20251209-SL412-Reward3_g0',
+    # '20251210-SL412-Reward4_g0',
+    # '20251211-SL412-Punish1_g0',
+    # '20251212-SL412-Punish2_g0',
+    # '20251213-SL412-Punish3_g0',
+    # '20251214-SL412-Punish4_g0',
+    # '20251215-SL412-Reward5_g0',
+    # '20251216-SL412-Punish5_g0',
+    # '20251217-SL412-Reward6_g0',
+    # '20251218-SL412-Punish6_g0',
 ]
 
 # ---------------------------------------------------------------------------
@@ -493,35 +493,14 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
         # Number of spikes in the 0-1 s window for each trial and each unit
         event_counts = response_counts.sum(axis=2)  # shape: (n_units, n_events)
         event_rates = event_counts / (response_window_ms[1] - response_window_ms[0])
-        # Center to the average of the first five trials for each unit
-        event_rates_diff = event_rates - np.mean(event_rates[:, :5], axis=1, keepdims=True)
-
-        # Calculate average event rate for each unit every n_grouped_trials (e.g. 5)
-        grouped_rates = []
-        for unit_rates in event_rates_diff:
-            unit_group_means = []
-            n_events = len(unit_rates)
-
-            for start in range(0, n_events, n_grouped_trials):
-                end = start + n_grouped_trials
-
-                # If this is the last full group and there are leftover trials after it,
-                # merge the leftovers into this final group
-                if end >= n_events or (n_events - end) < n_grouped_trials:
-                    unit_group_means.append(unit_rates[start:].mean())
-                    break
-                else:
-                    unit_group_means.append(unit_rates[start:end].mean())
-
-            grouped_rates.append(unit_group_means)
-        event_rates_diff_grouped = np.array(grouped_rates)
+        event_rates_diff_grouped = ndap.get_trial_changes(event_rates, n_grouped_trials=n_grouped_trials, n_baseline_trials=5)
 
         # Calculate slope of event_rates_diff_grouped vs trial.
         # If there is only one grouped timepoint, slope is undefined; keep as NaN.
         if event_rates_diff_grouped.ndim != 2 or event_rates_diff_grouped.shape[1] < 2:
-            slopes = np.full(event_rates_diff_grouped.shape[0], np.nan, dtype=float)
+            event_rates_slopes = np.full(event_rates_diff_grouped.shape[0], np.nan, dtype=float)
         else:
-            slopes = (event_rates_diff_grouped[:, -1] - event_rates_diff_grouped[:, 0]) / (
+            event_rates_slopes = (event_rates_diff_grouped[:, -1] - event_rates_diff_grouped[:, 0]) / (
                 (event_rates_diff_grouped.shape[1] - 1) * n_grouped_trials
             )
 
@@ -537,52 +516,78 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
             test='wilcoxon',
             alpha=0.05,
         )
+        mod_index_diff_grouped = ndap.get_trial_changes(mod_results['mod_index_per_trial'], n_grouped_trials=n_grouped_trials, n_baseline_trials=5)
+        if mod_index_diff_grouped.ndim != 2 or mod_index_diff_grouped.shape[1] < 2:
+            mod_index_slopes = np.full(mod_index_diff_grouped.shape[0], np.nan, dtype=float)
+        else:
+            mod_index_slopes = (mod_index_diff_grouped[:, -1] - mod_index_diff_grouped[:, 0]) / (
+                (mod_index_diff_grouped.shape[1] - 1) * n_grouped_trials
+            )
+
 
         # Save results to h5
         ndap.save_variables({
             'response_counts': response_counts,
             'event_rates': event_rates,
-            'event_rates_diff': event_rates_diff,
             'event_rates_diff_grouped': event_rates_diff_grouped,
-            'slopes': slopes,
+            'event_rates_slopes': event_rates_slopes,
             'mod_results': mod_results,
+            'mod_index_diff_grouped': mod_index_diff_grouped,
+            'mod_index_slopes': mod_index_slopes,
             'n_grouped_trials': n_grouped_trials,
         }, analysis_filepath, key=f'trials_spikes_{event_name}')
 
         # Plot trial vs normalized spikes for each unit, with x-axis as individual trial
-        fig, axs = plt.subplots(1, 3, figsize=(20, 8))
+        fig, axs = plt.subplots(2, 2, figsize=(20, 20))
 
         # Plot grouped event rates (averaged every n_grouped_trials)
         for i, unit_id in enumerate(good_unit_ids):
-            axs[0].plot(
+            axs[0,0].plot(
                 np.arange(event_rates_diff_grouped.shape[1]) * n_grouped_trials,
                 event_rates_diff_grouped[i],
                 marker='o',
             )
-        axs[0].set_xlabel(f'Trial (grouped every {n_grouped_trials})')
-        axs[0].set_ylabel(r'$\Delta$ Firing rate (Hz)')
-        axs[0].set_title(f'Trial vs Event-triggered spikes')
+        axs[0,0].set_xlabel(f'Trial (grouped every {n_grouped_trials})')
+        axs[0,0].set_ylabel(r'$\Delta$ Firing rate (Hz)')
+        axs[0,0].set_title(f'Trial vs Event-triggered spikes')
 
         # Plot distribution of slope (event_rates_diff_grouped vs trial)
-        finite_slopes = slopes[np.isfinite(slopes)]
+        finite_slopes = event_rates_slopes[np.isfinite(event_rates_slopes)]
         if finite_slopes.size > 0:
-            axs[1].hist(finite_slopes, bins=30)
+            axs[0,1].hist(finite_slopes, bins=30)
         else:
-            axs[1].text(0.5, 0.5, 'No finite slopes', ha='center', va='center', transform=axs[1].transAxes)
-        axs[1].set_xlabel('Slope')
-        axs[1].set_ylabel('Count')
-        axs[1].set_title(f'Distribution of slope (grouped every {n_grouped_trials} trials)')
+            axs[0,1].text(0.5, 0.5, 'No finite slopes', ha='center', va='center', transform=axs[0,1].transAxes)
+        axs[0,1].set_xlabel('Slope')
+        axs[0,1].set_ylabel('Count')
+        axs[0,1].set_title(f'Distribution of slope (grouped every {n_grouped_trials} trials)')
 
-        # Plot distribution of modulation index
-        mod_index = np.asarray(mod_results['mod_index'])
-        finite_mod_index = mod_index[np.isfinite(mod_index)]
-        if finite_mod_index.size > 0:
-            axs[2].hist(finite_mod_index, bins=30)
-        else:
-            axs[2].text(0.5, 0.5, 'No finite modulation indices', ha='center', va='center', transform=axs[2].transAxes)
-        axs[2].set_xlabel('Modulation index')
-        axs[2].set_ylabel('Count')
-        axs[2].set_title(f'Distribution of modulation index')
+        # # Plot distribution of modulation index
+        # mod_index = np.asarray(mod_results['mod_index'])
+        # finite_mod_index = mod_index[np.isfinite(mod_index)]
+        # if finite_mod_index.size > 0:
+        #     axs[1,0].hist(finite_mod_index, bins=30)
+        # else:
+        #     axs[1,0].text(0.5, 0.5, 'No finite modulation indices', ha='center', va='center', transform=axs[1,0].transAxes)
+        # axs[1,0].set_xlabel('Modulation index')
+        # axs[1,0].set_ylabel('Count')
+        # axs[1,0].set_title(f'Distribution of modulation index')
+
+        # Plot grouped event rates (averaged every n_grouped_trials)
+        for i, unit_id in enumerate(good_unit_ids):
+            axs[1,0].plot(
+                np.arange(mod_index_diff_grouped.shape[1]) * n_grouped_trials,
+                mod_index_diff_grouped[i],
+                marker='o',
+            )
+        axs[1,0].set_xlabel(f'Trial (grouped every {n_grouped_trials})')
+        axs[1,0].set_ylabel(r'$\Delta$ Modulation index')
+        axs[1,0].set_title(f'Trial vs Modulation index')
+
+        # Plot distribution of slope (event_rates_diff_grouped vs trial)
+        axs[1,1].hist(mod_index_slopes, bins=30)
+        axs[1,1].set_xlabel('Slope')
+        axs[1,1].set_ylabel('Count')
+        axs[1,1].set_title(f'Distribution of slope (grouped every {n_grouped_trials} trials)')
 
         plt.tight_layout()
         plt.savefig(os.path.join(save_folder, f'trials_spikes_{event_name}.pdf'), dpi=300, bbox_inches='tight')
@@ -663,34 +668,14 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
         # Number of spikes in the 0-1 s window for each trial and each unit
         lick_counts = lick_responses.sum(axis=2)  # shape: (n_units, n_events)
         lick_rates = lick_counts / (response_window_ms[1] - response_window_ms[0])
-        # Center to the average of the first five trials for each unit
-        lick_rates_diff = lick_rates - np.mean(lick_rates[:, :5], axis=1, keepdims=True)
-
-        # Calculate average event rate for each unit every n_grouped_trials (e.g. 5)
-        grouped_rates = []
-        for unit_rates in lick_rates_diff:
-            unit_group_means = []
-            n_events = len(unit_rates)
-
-            for start in range(0, n_events, n_grouped_trials):
-                end = start + n_grouped_trials
-                # If this is the last full group and there are leftover trials after it,
-                # merge the leftovers into this final group
-                if end >= n_events or (n_events - end) < n_grouped_trials:
-                    unit_group_means.append(unit_rates[start:].mean())
-                    break
-                else:
-                    unit_group_means.append(unit_rates[start:end].mean())
-
-            grouped_rates.append(unit_group_means)
-        lick_rates_diff_grouped = np.array(grouped_rates)
+        lick_rates_diff_grouped = ndap.get_trial_changes(lick_rates, n_grouped_trials=n_grouped_trials, n_baseline_trials=5)
 
         # Calculate slope of lick_rates_diff_grouped vs trial.
         # If there is only one grouped timepoint, slope is undefined; keep as NaN.
         if lick_rates_diff_grouped.ndim != 2 or lick_rates_diff_grouped.shape[1] < 2:
-            slopes = np.full(lick_rates_diff_grouped.shape[0], np.nan, dtype=float)
+            lick_rates_slopes = np.full(lick_rates_diff_grouped.shape[0], np.nan, dtype=float)
         else:
-            slopes = (lick_rates_diff_grouped[:, -1] - lick_rates_diff_grouped[:, 0]) / (
+            lick_rates_slopes = (lick_rates_diff_grouped[:, -1] - lick_rates_diff_grouped[:, 0]) / (
                 (lick_rates_diff_grouped.shape[1] - 1) * n_grouped_trials
             )
 
@@ -706,51 +691,79 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
             test='wilcoxon',
             alpha=0.05,
         )
+        mod_index_diff_grouped = ndap.get_trial_changes(mod_results['mod_index_per_trial'], n_grouped_trials=n_grouped_trials, n_baseline_trials=5)
+        if mod_index_diff_grouped.ndim != 2 or mod_index_diff_grouped.shape[1] < 2:
+            mod_index_slopes = np.full(mod_index_diff_grouped.shape[0], np.nan, dtype=float)
+        else:
+            mod_index_slopes = (mod_index_diff_grouped[:, -1] - mod_index_diff_grouped[:, 0]) / (
+                (mod_index_diff_grouped.shape[1] - 1) * n_grouped_trials
+            )
         
         # Save results to h5
         ndap.save_variables({
             'lick_counts': lick_counts,
             'lick_rates': lick_rates,
-            'lick_rates_diff': lick_rates_diff,
             'lick_rates_diff_grouped': lick_rates_diff_grouped,
-            'slopes': slopes,
+            'lick_rates_slopes': lick_rates_slopes,
             'mod_results': mod_results,
+            'mod_index_diff_grouped': mod_index_diff_grouped,
+            'mod_index_slopes': mod_index_slopes,
             'n_grouped_trials': n_grouped_trials,
         }, analysis_filepath, key=f'trials_licks_{event_name}')
 
         # Plot trial responses like the same for spikes
-        fig, axs = plt.subplots(1, 3, figsize=(20, 8))
+        fig, axs = plt.subplots(2, 2, figsize=(20, 20))
 
         # Plot grouped event rates (averaged every n_grouped_trials)
-        axs[0].plot(
+        axs[0,0].plot(
             np.arange(lick_rates_diff_grouped.shape[1]) * n_grouped_trials,
             lick_rates_diff_grouped[0],
             marker='o',
         )
-        axs[0].set_xlabel(f'Trial (grouped every {n_grouped_trials})')
-        axs[0].set_ylabel(r'$\Delta$ Lick rate (Hz)')
-        axs[0].set_title(f'Trial vs Event-triggered licks')
+        axs[0,0].set_xlabel(f'Trial (grouped every {n_grouped_trials})')
+        axs[0,0].set_ylabel(r'$\Delta$ Lick rate (Hz)')
+        axs[0,0].set_title(f'Trial vs Event-triggered licks')
 
         # Plot distribution of slope (lick_rates_diff_grouped vs trial)
-        finite_slopes = slopes[np.isfinite(slopes)]
+        finite_slopes = lick_rates_slopes[np.isfinite(lick_rates_slopes)]
         if finite_slopes.size > 0:
-            axs[1].hist(finite_slopes, bins=30)
+            axs[0,1].hist(finite_slopes, bins=30)
         else:
-            axs[1].text(0.5, 0.5, 'No finite slopes', ha='center', va='center', transform=axs[1].transAxes)
-        axs[1].set_xlabel('Slope')
-        axs[1].set_ylabel('Count')
-        axs[1].set_title(f'Distribution of slope (grouped every {n_grouped_trials} trials)')
+            axs[0,1].text(0.5, 0.5, 'No finite slopes', ha='center', va='center', transform=axs[0,1].transAxes)
+        axs[0,1].set_xlabel('Slope')
+        axs[0,1].set_ylabel('Count')
+        axs[0,1].set_title(f'Distribution of slope (grouped every {n_grouped_trials} trials)')
 
         # Plot distribution of modulation index
-        mod_index = np.asarray(mod_results['mod_index'])
-        finite_mod_index = mod_index[np.isfinite(mod_index)]
-        if finite_mod_index.size > 0:
-            axs[2].hist(finite_mod_index, bins=30)
+        # mod_index = np.asarray(mod_results['mod_index'])
+        # finite_mod_index = mod_index[np.isfinite(mod_index)]
+        # if finite_mod_index.size > 0:
+        #     axs[2].hist(finite_mod_index, bins=30)
+        # else:
+        #     axs[2].text(0.5, 0.5, 'No finite modulation indices', ha='center', va='center', transform=axs[2].transAxes)
+        # axs[2].set_xlabel('Modulation index')
+        # axs[2].set_ylabel('Count')
+        # axs[2].set_title(f'Distribution of modulation index')
+
+        # Plot grouped event rates (averaged every n_grouped_trials)
+        axs[1,0].plot(
+            np.arange(mod_index_diff_grouped.shape[1]) * n_grouped_trials,
+            mod_index_diff_grouped[0],
+            marker='o',
+        )
+        axs[1,0].set_xlabel(f'Trial (grouped every {n_grouped_trials})')
+        axs[1,0].set_ylabel(r'$\Delta$ Modulation index')
+        axs[1,0].set_title(f'Trial vs Modulation index')
+
+        # Plot distribution of slope (mod_index_diff_grouped vs trial)
+        finite_slopes = mod_index_slopes[np.isfinite(mod_index_slopes)]
+        if finite_slopes.size > 0:
+            axs[1,1].hist(finite_slopes, bins=30)
         else:
-            axs[2].text(0.5, 0.5, 'No finite modulation indices', ha='center', va='center', transform=axs[2].transAxes)
-        axs[2].set_xlabel('Modulation index')
-        axs[2].set_ylabel('Count')
-        axs[2].set_title(f'Distribution of modulation index')
+            axs[1,1].text(0.5, 0.5, 'No finite slopes', ha='center', va='center', transform=axs[1,1].transAxes)
+        axs[1,1].set_xlabel('Slope')
+        axs[1,1].set_ylabel('Count')
+        axs[1,1].set_title(f'Distribution of slope (grouped every {n_grouped_trials} trials)')
 
         plt.tight_layout()
         plt.savefig(os.path.join(save_folder, f'trials_licks_{event_name}.pdf'), dpi=300, bbox_inches='tight')

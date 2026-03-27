@@ -448,3 +448,49 @@ def get_licks(
     aligned['times'] = aligned['times'][0]   # list of arrays, one per event
 
     return aligned
+
+
+def get_trial_changes(data, n_grouped_trials, n_baseline_trials=None):
+    """
+    Compute trial-by-trial rate changes, optionally baseline-subtracted,
+    then averaged into groups of n_grouped_trials.
+
+    Parameters
+    ----------
+    data : ndarray, shape (n_units, n_trials)
+        Per-trial firing / lick rates for each unit.
+    n_grouped_trials : int
+        Number of consecutive trials to average into each group.
+        The last group absorbs any leftover trials shorter than n_grouped_trials.
+    n_baseline_trials : int or None
+        If given, subtract the mean of the first n_baseline_trials from each
+        unit before grouping (yields a delta-rate relative to baseline).
+        If None, group the raw values without any baseline subtraction.
+
+    Returns
+    -------
+    grouped : ndarray, shape (n_units, n_groups)
+        Grouped (and optionally baseline-subtracted) rates.
+    """
+    data = np.asarray(data)
+    if data.ndim == 1:
+        data = data[np.newaxis, :]   # treat 1-D input as single unit
+
+    if n_baseline_trials is not None:
+        data = data - np.mean(data[:, :n_baseline_trials], axis=1, keepdims=True)
+
+    n_units, n_trials = data.shape
+    grouped = []
+    for unit_rates in data:
+        unit_group_means = []
+        for start in range(0, n_trials, n_grouped_trials):
+            end = start + n_grouped_trials
+            # Merge leftover trials that are shorter than a full group into the last group
+            if end >= n_trials or (n_trials - end) < n_grouped_trials:
+                unit_group_means.append(unit_rates[start:].mean())
+                break
+            else:
+                unit_group_means.append(unit_rates[start:end].mean())
+        grouped.append(unit_group_means)
+
+    return np.array(grouped)
