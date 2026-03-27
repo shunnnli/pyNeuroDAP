@@ -42,21 +42,21 @@ import pyNeuroDAP as ndap
 # ---------------------------------------------------------------------------
 all_sessions = [
     '20251202-SL412-Random1_g0',
-#     '20251203-SL412-Random2_g0',
-#     '20251205-SL412-Random3_g0',
-#     '20251206-SL412-Random4_g0',
-#     '20251207-SL412-Reward1_g0',
-#     '20251208-SL412-Reward2_g0',
-#     '20251209-SL412-Reward3_g0',
-#     '20251210-SL412-Reward4_g0',
-#     '20251211-SL412-Punish1_g0',
-#     '20251212-SL412-Punish2_g0',
-#     '20251213-SL412-Punish3_g0',
-#     '20251214-SL412-Punish4_g0',
-#     '20251215-SL412-Reward5_g0',
-#     '20251216-SL412-Punish5_g0',
-#     '20251217-SL412-Reward6_g0',
-#     '20251218-SL412-Punish6_g0',
+    '20251203-SL412-Random2_g0',
+    '20251205-SL412-Random3_g0',
+    '20251206-SL412-Random4_g0',
+    '20251207-SL412-Reward1_g0',
+    '20251208-SL412-Reward2_g0',
+    '20251209-SL412-Reward3_g0',
+    '20251210-SL412-Reward4_g0',
+    '20251211-SL412-Punish1_g0',
+    '20251212-SL412-Punish2_g0',
+    '20251213-SL412-Punish3_g0',
+    '20251214-SL412-Punish4_g0',
+    '20251215-SL412-Reward5_g0',
+    '20251216-SL412-Punish5_g0',
+    '20251217-SL412-Reward6_g0',
+    '20251218-SL412-Punish6_g0',
 ]
 
 # ---------------------------------------------------------------------------
@@ -546,6 +546,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
             'event_rates_diff_grouped': event_rates_diff_grouped,
             'slopes': slopes,
             'mod_results': mod_results,
+            'n_grouped_trials': n_grouped_trials,
         }, analysis_filepath, key=f'trials_spikes_{event_name}')
 
         # Plot trial vs normalized spikes for each unit, with x-axis as individual trial
@@ -714,6 +715,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
             'lick_rates_diff_grouped': lick_rates_diff_grouped,
             'slopes': slopes,
             'mod_results': mod_results,
+            'n_grouped_trials': n_grouped_trials,
         }, analysis_filepath, key=f'trials_licks_{event_name}')
 
         # Plot trial responses like the same for spikes
@@ -808,7 +810,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
 # ---------------------------------------------------------------------------
 all_results = []
 for session_name in all_sessions:
-    res = process_session(session_name, plot_all_units=False)
+    res = process_session(session_name, plot_all_units=True)
     all_results.append(res)
 
 # ---------------------------------------------------------------------------
