@@ -83,7 +83,8 @@ from .plots import (
     plot_sem,
     convert_dict_to_list,
     plot_pca,
-    plot_all_units
+    plot_all_units,
+    plot_distribution,
 )
 
 from .gui import (
@@ -166,6 +167,7 @@ __all__ = [
     'convert_dict_to_list',
     'plot_pca',
     'plot_all_units',
+    'plot_distribution',
     
     # GUI utilities
     'create_session_gui',

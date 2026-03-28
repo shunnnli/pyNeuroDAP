@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 from matplotlib.gridspec import GridSpec
 import pickle
 from matplotlib import cm
@@ -588,3 +589,314 @@ def plot_coding_directions(cd_stimulus, cd_choice, ax=None,
     ax.grid(True, alpha=0.3)
     
     return ax
+
+
+def _ecdf(x):
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        return np.array([]), np.array([])
+    x = np.sort(x)
+    y = np.arange(1, x.size + 1) / x.size
+    return x, y
+
+
+def _bootstrap_null_mean(data, n_boot=5000, rng=None):
+    """
+    Bootstrap a null distribution of the mean under H0: mean == 0
+    by centering the data before resampling.
+    """
+    x = np.asarray(data, dtype=float).ravel()
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        raise ValueError("Input data contains no finite values.")
+
+    if rng is None:
+        rng = np.random.default_rng()
+
+    observed_mean = np.mean(x)
+    null_data = x - observed_mean
+
+    boot_idx = rng.integers(0, x.size, size=(n_boot, x.size))
+    null_means = null_data[boot_idx].mean(axis=1)
+
+    p_two_sided = (np.sum(np.abs(null_means) >= abs(observed_mean)) + 1) / (n_boot + 1)
+    return observed_mean, null_means, p_two_sided
+
+
+def _p_to_stars(p):
+    if p < 0.001:
+        return "***"
+    if p < 0.01:
+        return "**"
+    if p < 0.05:
+        return "*"
+    return "n.s."
+
+
+def _resolve_distribution_axes(ax, height_ratios=(1, 4), hspace=0.05, figsize=(6, 6)):
+    """
+    Resolve axes for plot_distribution.
+
+    Supported:
+    - ax=None: create a new figure with 2 stacked axes
+    - ax=<single Axes>: use that subplot slot as a placeholder and replace it
+      with 2 stacked axes
+    - ax=(ax_top, ax_bottom): use an explicitly provided axis pair
+    """
+    if ax is None:
+        fig = plt.figure(figsize=figsize, constrained_layout=True)
+        gs = fig.add_gridspec(2, 1, height_ratios=height_ratios, hspace=hspace)
+        ax_top = fig.add_subplot(gs[0])
+        ax_bottom = fig.add_subplot(gs[1])
+        target_key = ("none", id(fig))
+        return fig, ax_top, ax_bottom, target_key
+
+    if isinstance(ax, (tuple, list)) and len(ax) == 2:
+        ax_top, ax_bottom = ax
+        fig = ax_top.figure
+        target_key = ("pair", id(ax_top), id(ax_bottom))
+        return fig, ax_top, ax_bottom, target_key
+
+    if isinstance(ax, Axes):
+        fig = ax.figure
+        target_key = ("placeholder", id(ax))
+        return fig, None, None, target_key
+
+    raise ValueError("ax must be None, a single matplotlib Axes, or a tuple/list of two Axes.")
+
+
+def plot_distribution(
+    data,
+    *,
+    label=None,
+    color=None,
+    ax=None,
+    n_boot=5000,
+    nbins=60,
+    xlabel="value",
+    top_xlabel=None,
+    alpha=0.18,
+    linewidth=2.0,
+    random_state=0,
+    figsize=(6, 6),
+    height_ratios=(1, 4),
+    hspace=0.05,
+    show_legend=False,
+):
+    """
+    Add one distribution to a shared 2-panel plot.
+
+    Call repeatedly with the same `ax` to overlay multiple groups; state is
+    initialised automatically on the first call for each target axes.
+
+    Usage
+    -----
+    plot_distribution(group1, ax=axs[1,1], ...)
+    plot_distribution(group2, ax=axs[1,1], ...)
+    plot_distribution(group3, ax=axs[1,1], ...)
+
+    If `ax` is a single axis, that axis is treated as a placeholder and replaced
+    by two vertically stacked axes inside the same subplot slot.
+
+    Parameters
+    ----------
+    data : array-like
+        1D data for one condition.
+    label : str, optional
+        Condition label.
+    color : matplotlib color, optional
+        Color for this condition.
+    ax : None, Axes, or (Axes, Axes)
+        Plot target.
+    n_boot : int
+        Number of bootstrap samples.
+    nbins : int
+        Number of bins in the top histogram.
+    xlabel : str
+        Lower panel x-axis label.
+    top_xlabel : str or None
+        Upper panel x-axis label. Defaults to f'average {xlabel}'.
+    alpha : float
+        Histogram transparency.
+    linewidth : float
+        ECDF and mean-line width.
+    random_state : int
+        Base seed for reproducibility.
+    figsize : tuple
+        Used only when ax=None.
+    height_ratios : tuple
+        Relative heights of top and bottom panels.
+    hspace : float
+        Vertical spacing between top and bottom panels.
+    show_legend : bool
+        Whether to show the legend on the bottom panel.
+
+    Returns
+    -------
+    fig, (ax_top, ax_bottom)
+    """
+    if top_xlabel is None:
+        top_xlabel = f"average {xlabel}"
+
+    if not hasattr(plot_distribution, "_state_by_target"):
+        plot_distribution._state_by_target = {}
+
+    fig, ax_top, ax_bottom, target_key = _resolve_distribution_axes(
+        ax=ax,
+        height_ratios=height_ratios,
+        hspace=hspace,
+        figsize=figsize,
+    )
+
+    # Initialize state for this target on first use
+    if target_key not in plot_distribution._state_by_target:
+        if isinstance(ax, Axes):
+            placeholder_ax = ax
+            subgs = placeholder_ax.get_subplotspec().subgridspec(
+                2, 1, height_ratios=height_ratios, hspace=hspace
+            )
+            if placeholder_ax in fig.axes:
+                placeholder_ax.remove()
+            ax_top = fig.add_subplot(subgs[0])
+            ax_bottom = fig.add_subplot(subgs[1])
+        elif ax_top is None or ax_bottom is None:
+            raise RuntimeError("Failed to initialize distribution axes.")
+
+        plot_distribution._state_by_target[target_key] = {
+            "datasets": [],
+            "labels": [],
+            "colors": [],
+            "fig": fig,
+            "ax_top": ax_top,
+            "ax_bottom": ax_bottom,
+        }
+
+    state = plot_distribution._state_by_target[target_key]
+    fig = state["fig"]
+    ax_top = state["ax_top"]
+    ax_bottom = state["ax_bottom"]
+
+    x = np.asarray(data, dtype=float).ravel()
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        raise ValueError("Input data contains no finite values.")
+
+    group_idx = len(state["datasets"])
+    if label is None:
+        label = f"group {group_idx + 1}"
+    if color is None:
+        color = plt.get_cmap("tab10")(group_idx % 10)
+
+    state["datasets"].append(x)
+    state["labels"].append(label)
+    state["colors"].append(color)
+
+    # Redraw from scratch using all accumulated groups
+    ax_top.clear()
+    ax_bottom.clear()
+
+    summaries = []
+    all_null_means = []
+    all_raw = []
+
+    for i, (group_data, group_label, group_color) in enumerate(
+        zip(state["datasets"], state["labels"], state["colors"])
+    ):
+        rng = np.random.default_rng(random_state + i)
+        observed_mean, null_means, p_value = _bootstrap_null_mean(
+            group_data,
+            n_boot=n_boot,
+            rng=rng,
+        )
+        summaries.append({
+            "data": group_data,
+            "label": group_label,
+            "color": group_color,
+            "observed_mean": observed_mean,
+            "null_means": null_means,
+            "p_value": p_value,
+        })
+        all_null_means.append(null_means)
+        all_raw.append(group_data)
+
+    # Top panel: bootstrap null distributions of the mean + observed mean lines
+    pooled_null = np.concatenate(all_null_means)
+    pooled_obs = np.array([s["observed_mean"] for s in summaries], dtype=float)
+
+    xmin = min(np.nanmin(pooled_null), np.nanmin(pooled_obs))
+    xmax = max(np.nanmax(pooled_null), np.nanmax(pooled_obs))
+    span = xmax - xmin
+    if span == 0:
+        span = 1.0
+    pad = 0.08 * span
+    bins = np.linspace(xmin - pad, xmax + pad, nbins)
+
+    for s in summaries:
+        ax_top.hist(
+            s["null_means"],
+            bins=bins,
+            density=True,
+            color=s["color"],
+            alpha=alpha,
+            edgecolor="none",
+        )
+        ax_top.axvline(
+            s["observed_mean"],
+            color=s["color"],
+            linewidth=2.5,
+        )
+
+    ymax = ax_top.get_ylim()[1]
+    for s in summaries:
+        ax_top.text(
+            s["observed_mean"],
+            ymax * 0.97,
+            _p_to_stars(s["p_value"]),
+            ha="center",
+            va="top",
+            rotation=90,
+            fontsize=11,
+            color="black",
+        )
+
+    ax_top.set_xlim(xmin - pad, xmax + pad)
+    ax_top.set_xlabel(top_xlabel)
+    ax_top.set_yticks([])
+    ax_top.spines["top"].set_visible(False)
+    ax_top.spines["right"].set_visible(False)
+    ax_top.spines["left"].set_visible(False)
+    ax_top.tick_params(axis="y", left=False, labelleft=False)
+
+    # Bottom panel: ECDF
+    pooled_raw = np.concatenate(all_raw)
+    raw_xmin = np.nanmin(pooled_raw)
+    raw_xmax = np.nanmax(pooled_raw)
+    raw_span = raw_xmax - raw_xmin
+    if raw_span == 0:
+        raw_span = 1.0
+    raw_pad = 0.05 * raw_span
+
+    for s in summaries:
+        ecdf_x, ecdf_y = _ecdf(s["data"])
+        ax_bottom.step(
+            ecdf_x,
+            ecdf_y,
+            where="post",
+            color=s["color"],
+            linewidth=linewidth,
+            label=s["label"],
+        )
+
+    ax_bottom.set_xlim(raw_xmin - raw_pad, raw_xmax + raw_pad)
+    ax_bottom.set_ylim(0, 1)
+    ax_bottom.set_xlabel(xlabel)
+    ax_bottom.set_ylabel("cumulative probability")
+    ax_bottom.spines["top"].set_visible(False)
+    ax_bottom.spines["right"].set_visible(False)
+
+    if show_legend:
+        ax_bottom.legend(frameon=False)
+
+    fig.canvas.draw_idle()
+    return fig, (ax_top, ax_bottom)
