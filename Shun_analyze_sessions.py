@@ -492,7 +492,8 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
 
         # Number of spikes in the 0-1 s window for each trial and each unit
         event_counts = response_counts.sum(axis=2)  # shape: (n_units, n_events)
-        event_rates = event_counts / (response_window_ms[1] - response_window_ms[0])
+        window_duration_s = (response_window_ms[1] - response_window_ms[0]) / 1000.0
+        event_rates = event_counts / window_duration_s  # spikes/s (Hz)
         event_rates_diff_grouped = ndap.get_trial_changes(event_rates, n_grouped_trials=n_grouped_trials, n_baseline_trials=5)
 
         # Calculate slope of event_rates_diff_grouped vs trial.
