@@ -634,7 +634,7 @@ def _p_to_stars(p):
     return "n.s."
 
 
-def _resolve_distribution_axes(ax, height_ratios=(1, 4), hspace=0.05, figsize=(6, 6)):
+def _resolve_distribution_axes(ax, height_ratios=(1, 4), hspace=0.35, figsize=(6, 6)):
     """
     Resolve axes for plot_distribution.
 
@@ -680,8 +680,8 @@ def plot_distribution(
     linewidth=2.0,
     random_state=0,
     figsize=(6, 6),
-    height_ratios=(1, 4),
-    hspace=0.05,
+    height_ratios=(1, 3),
+    hspace=0.35,
     show_legend=False,
 ):
     """
@@ -857,7 +857,7 @@ def plot_distribution(
             va="top",
             rotation=90,
             fontsize=11,
-            color="black",
+            color=s["color"],
         )
 
     ax_top.set_xlim(xmin - pad, xmax + pad)
