@@ -374,7 +374,8 @@ def plot_all_units(spikes, event, time_range, plot_style='raster',
                 params = None, same_system = False,
                 save_figure = False, save_folder = None, figsize=(15, 3), save_png=False, save_pdf=True,
                 event_color='tab:red', event_duration=0.5, event_label='Event', event_alpha=0.25, event_onset=0,
-                spike_color='tab:blue',):
+                spike_color='tab:blue',
+                verbose=False):
 
     if any(x is None for x in [spikes, event, time_range]):
         raise ValueError('spikes, event, and time_range must be provided')
@@ -382,7 +383,8 @@ def plot_all_units(spikes, event, time_range, plot_style='raster',
     # Plot PSTH aligned to event
     xaxis = get_time_axis(time_range, bin_size_ms=bin_size_ms)
 
-    print('Aligning spikes to onsets...')
+    if verbose:
+        print('Aligning spikes to onsets...')
     aligned = get_spikes(spikes, event, time_range, 
                         include_units=good_units, 
                         same_system=same_system, 
@@ -390,8 +392,9 @@ def plot_all_units(spikes, event, time_range, plot_style='raster',
                         remove_event_artifacts=remove_event_artifacts,
                         event_duration=event_duration,
                         bin_size_ms=bin_size_ms)
-    print(f'Finished: aligned {len(event)} events')
-    print(f'Shape: {aligned["rate"].shape} (units, events, bins)')
+    if verbose:
+        print(f'Finished: aligned {len(event)} events')
+        print(f'Shape: {aligned["rate"].shape} (units, events, bins)')
 
     # Get spike rate data: shape (units, events, bins)
     spike_rates = aligned['rate']  # Shape: (n_units, n_events, n_bins)
@@ -445,7 +448,9 @@ def plot_all_units(spikes, event, time_range, plot_style='raster',
         axes[idx].axis('off')
 
     plt.tight_layout()
-    plt.show()
+    # Agg (batch / headless) cannot display; plt.show() only warns and does nothing.
+    if plt.get_backend().lower() != "agg":
+        plt.show()
 
     # Save figure
     if save_figure is True and save_folder is not None:
