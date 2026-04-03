@@ -81,6 +81,9 @@ salt_reliability_threshold = 0.25
 apFs = 30000
 behaviorFs = 10000
 
+# Other knobs
+remove_event_artifacts = True
+n_grouped_trials = 5
 
 # ---------------------------------------------------------------------------
 # Helper: process one session
@@ -274,16 +277,24 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
         valid = pos < lick_onsets_sorted.size
         water_lick_onsets = np.unique(lick_onsets_sorted[pos[valid]])
 
-    print(f'  Blue laser onsets : {len(blueLaser_onsets)}')
-    print(f'  Red laser onsets  : {len(redLaser_onsets)}')
-    print(f'  Water onsets      : {len(water_onsets)}')
-    print(f'  Airpuff onsets    : {len(airpuff_onsets)}')
-
     if len(blueLaser_onsets) == 0:
         result['error'] = 'No blue laser onsets found'
         print(f'  ERROR: {result["error"]}')
         return result
     
+    # Add baseline onsets as control (500ms before onset)
+    if 'RANDOM' in session_name.upper():
+        redLaser_onsets_baseline = redLaser_onsets - int(0.5*behaviorFs) if redLaser_onsets.size > 0 else np.array([])
+        tone_onsets_baseline = tone_onsets - int(0.5*behaviorFs) if tone_onsets.size > 0 else np.array([])
+        airpuff_onsets_baseline = airpuff_onsets - int(0.5*behaviorFs) if airpuff_onsets.size > 0 else np.array([])
+        water_lick_onsets_baseline = water_lick_onsets - int(0.5*behaviorFs) if water_lick_onsets.size > 0 else np.array([])
+    else:
+        opto_only_onsets_baseline = opto_only_onsets - int(0.5*behaviorFs) if opto_only_onsets.size > 0 else np.array([])
+        tone_only_onsets_baseline = tone_only_onsets - int(0.5*behaviorFs) if tone_only_onsets.size > 0 else np.array([])
+        pair_onsets_baseline = pair_onsets - int(0.5*behaviorFs) if pair_onsets.size > 0 else np.array([])
+        water_lick_onsets_baseline = water_lick_onsets - int(0.5*behaviorFs) if water_lick_onsets.size > 0 else np.array([])
+        airpuff_onsets_baseline = airpuff_onsets - int(0.5*behaviorFs) if airpuff_onsets.size > 0 else np.array([])
+
 
     # ------------------------------------------------------------------
     # Run SALT  (notebook: Plot PSTH near blue opto)
@@ -455,19 +466,24 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
     response_window_ms = (0, 500)
     baseline_window_ms = (-500, 0)
     xaxis = ndap.get_time_axis(time_range=time_range, bin_size_ms=bin_size_ms)
-    n_grouped_trials = 10
 
     # Align spikes to a chosen event and count spikes from 0 to 1 s after onset
     if 'RANDOM' in session_name.upper():
-        event_types = [water_lick_onsets, tone_onsets, airpuff_onsets, redLaser_onsets]
-        event_names = ['water_lick', 'tone', 'airpuff', 'red_opto']
-        event_duration = [0.2, 0.5, 0.2, 0.5]
+        event_types = [water_lick_onsets, tone_onsets, airpuff_onsets, redLaser_onsets,
+                        water_lick_onsets_baseline, tone_onsets_baseline, airpuff_onsets_baseline, redLaser_onsets_baseline]
+        event_names = ['water_lick', 'tone', 'airpuff', 'red_opto', 
+                        'water_lick_baseline', 'tone_baseline', 'airpuff_baseline', 'red_opto_baseline']
+        event_duration = [0.2, 0.5, 0.2, 0.5, 0, 0, 0, 0]
+        remove_event_artifacts = [True, True, True, True, False, False, False, False]
     else:
-        event_types = [opto_only_onsets, tone_only_onsets, pair_onsets, water_lick_onsets, airpuff_onsets]
-        event_names = ['opto_only', 'tone_only', 'pair', 'water_lick', 'airpuff']
-        event_duration = [0.5, 0.5, 0.5, 0.2, 0.2]
+        event_types = [opto_only_onsets, tone_only_onsets, pair_onsets, water_lick_onsets, airpuff_onsets,
+        opto_only_onsets_baseline, tone_only_onsets_baseline, pair_onsets_baseline, water_lick_onsets_baseline, airpuff_onsets_baseline]
+        event_names = ['opto_only', 'tone_only', 'pair', 'water_lick', 'airpuff',
+                        'opto_only_baseline', 'tone_only_baseline', 'pair_baseline', 'water_lick_baseline', 'airpuff_baseline']
+        event_duration = [0.5, 0.5, 0.5, 0.2, 0.2, 0, 0, 0, 0, 0]
+        remove_event_artifacts = [True, True, True, True, True, False, False, False, False, False]
 
-    for event_times, event_name, event_duration in zip(event_types, event_names, event_duration):
+    for event_times, event_name, event_duration, remove_event_artifacts in zip(event_types, event_names, event_duration, remove_event_artifacts):
 
         # Skip empty event sets
         if event_times is None or len(event_times) == 0:
@@ -483,7 +499,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
             same_system=False,
             params=params,
             include_units=good_units,
-            remove_event_artifacts=True,
+            remove_event_artifacts=remove_event_artifacts,
             event_duration=event_duration,
         )
         ndap.save_aligned_spikes(event_aligned, analysis_filepath, key=f'spikes_{event_name}')
@@ -608,7 +624,6 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
     # ------------------------------------------------------------------
     bin_size_ms = 100
     xaxis = ndap.get_time_axis(time_range=time_range, bin_size_ms=bin_size_ms)
-    n_grouped_trials = 10
     
     n_events_plot = len(event_types)
     fig = plt.figure(figsize=(5 * n_events_plot, 10))
@@ -659,7 +674,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
         lick_aligned = ndap.get_licks(lick_onsets, event_times, time_range=time_range, bin_size_ms=bin_size_ms)
         # Add new dimension to lick_aligned
         lick_aligned['count'] = lick_aligned['count'][np.newaxis, :, :]
-        lick_aligned['rate'] = lick_aligned['rate'][np.newaxis, :, :]
+        lick_aligned['rate']  = lick_aligned['rate'][np.newaxis, :, :]
 
         #-------------------------------------------------
         # Get trial responses for each event similar to spikes
