@@ -370,7 +370,7 @@ def plot_psth(spike_data, time_window=None, bin_size_ms=50, ax=None,
 
 
 def plot_all_units(spikes, event, time_range, plot_style='raster',
-                bin_size_ms = 5, good_units = None, good_unit_ids = None,
+                bin_size_ms = 5, good_units = None, good_unit_ids = None, remove_event_artifacts=True,
                 params = None, same_system = False,
                 save_figure = False, save_folder = None, figsize=(15, 3), save_png=False, save_pdf=True,
                 event_color='tab:red', event_duration=0.5, event_label='Event', event_alpha=0.25, event_onset=0,
@@ -387,6 +387,8 @@ def plot_all_units(spikes, event, time_range, plot_style='raster',
                         include_units=good_units, 
                         same_system=same_system, 
                         params=params, 
+                        remove_event_artifacts=remove_event_artifacts,
+                        event_duration=event_duration,
                         bin_size_ms=bin_size_ms)
     print(f'Finished: aligned {len(event)} events')
     print(f'Shape: {aligned["rate"].shape} (units, events, bins)')

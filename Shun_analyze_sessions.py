@@ -441,6 +441,8 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
         same_system=False,
         params=params,
         include_units=good_units,
+        remove_event_artifacts=True,
+        event_duration=0.01,
     )
     ndap.save_aligned_spikes(event_aligned, analysis_filepath, key=f'spikes_blue_opto')
 
@@ -459,11 +461,13 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
     if 'RANDOM' in session_name.upper():
         event_types = [water_lick_onsets, tone_onsets, airpuff_onsets, redLaser_onsets]
         event_names = ['water_lick', 'tone', 'airpuff', 'red_opto']
+        event_duration = [0.2, 0.5, 0.2, 0.5]
     else:
         event_types = [opto_only_onsets, tone_only_onsets, pair_onsets, water_lick_onsets, airpuff_onsets]
         event_names = ['opto_only', 'tone_only', 'pair', 'water_lick', 'airpuff']
+        event_duration = [0.5, 0.5, 0.5, 0.2, 0.2]
 
-    for event_times, event_name in zip(event_types, event_names):
+    for event_times, event_name, event_duration in zip(event_types, event_names, event_duration):
 
         # Skip empty event sets
         if event_times is None or len(event_times) == 0:
@@ -479,6 +483,8 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
             same_system=False,
             params=params,
             include_units=good_units,
+            remove_event_artifacts=True,
+            event_duration=event_duration,
         )
         ndap.save_aligned_spikes(event_aligned, analysis_filepath, key=f'spikes_{event_name}')
 
