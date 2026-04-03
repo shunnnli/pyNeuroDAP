@@ -1,8 +1,31 @@
 import re
+import logging
+from contextlib import contextmanager
 import numpy as np
 import pandas as pd
 import scipy.io as sio
 import h5py
+
+
+@contextmanager
+def _suppress_mat73_unsupported_type_logs():
+    """
+    mat73 logs ERROR for MATLAB v7.3 types it cannot decode (string, table, …).
+    Those fields are usually metadata; numeric channels still load. Filter the
+    noisy messages without hiding other errors.
+    """
+    class _Mat73NoiseFilter(logging.Filter):
+        def filter(self, record):
+            msg = record.getMessage()
+            return "MATLAB type not supported" not in msg
+
+    flt = _Mat73NoiseFilter()
+    root = logging.getLogger()
+    root.addFilter(flt)
+    try:
+        yield
+    finally:
+        root.removeFilter(flt)
 
 
 # Load data from matlab file
@@ -18,7 +41,8 @@ def load_mat(file_path):
         # If it's a v7.3 file, use mat73 for proper struct handling
         try:
             import mat73
-            mat_data = mat73.loadmat(file_path)
+            with _suppress_mat73_unsupported_type_logs():
+                mat_data = mat73.loadmat(file_path)
             return mat_data
         except ImportError:
             # Fallback to basic h5py (less reliable for structs)
