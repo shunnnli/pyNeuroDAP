@@ -41,10 +41,10 @@ import pyNeuroDAP as ndap
 # Sessions to process  (mirrors the commented list in the notebook)
 # ---------------------------------------------------------------------------
 all_sessions = [
-    '20251202-SL412-Random1_g0',
-    '20251203-SL412-Random2_g0',
-    '20251205-SL412-Random3_g0',
-    '20251206-SL412-Random4_g0',
+    # '20251202-SL412-Random1_g0',
+    # '20251203-SL412-Random2_g0',
+    # '20251205-SL412-Random3_g0',
+    # '20251206-SL412-Random4_g0',
     '20251207-SL412-Reward1_g0',
     '20251208-SL412-Reward2_g0',
     '20251209-SL412-Reward3_g0',
@@ -855,9 +855,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
             'opto_only_onsets':  opto_only_onsets,
             'pair_onsets':       pair_onsets,
             'water_lick_onsets_baseline': water_lick_onsets_baseline,
-            'tone_onsets_baseline': tone_onsets_baseline,
             'airpuff_onsets_baseline': airpuff_onsets_baseline,
-            'redLaser_onsets_baseline': redLaser_onsets_baseline,
             'opto_only_onsets_baseline': opto_only_onsets_baseline,
             'tone_only_onsets_baseline': tone_only_onsets_baseline,
             'pair_onsets_baseline': pair_onsets_baseline,
