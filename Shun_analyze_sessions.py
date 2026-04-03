@@ -515,7 +515,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
 
         # Number of spikes in the 0-1 s window for each trial and each unit
         event_counts = response_counts.sum(axis=2)  # shape: (n_units, n_events)
-        window_duration_s = (response_window_ms[1] - response_window_ms[0]) / 1000.0
+        window_duration_s = np.abs(response_window_ms[1] - response_window_ms[0]) / 1000.0
         event_rates = event_counts / window_duration_s  # spikes/s (Hz)
         event_rates_grouped = ndap.get_trial_changes(event_rates, n_grouped_trials=n_grouped_trials)
         event_rates_diff_grouped = ndap.get_trial_changes(event_rates, n_grouped_trials=n_grouped_trials, n_baseline_trials=5)
@@ -557,7 +557,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
             bin_size_ms=bin_size_ms,
         )
         event_counts_baseline = baseline_counts.sum(axis=2)  # shape: (n_units, n_events)
-        baseline_duration_s = (baseline_window_ms[1] - baseline_window_ms[0]) / 1000.0
+        baseline_duration_s = np.abs(baseline_window_ms[1] - baseline_window_ms[0]) / 1000.0
         baseline_rates = event_counts_baseline / baseline_duration_s
 
 
@@ -718,7 +718,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
 
         # Number of lick counts in response window (pseudo-unit dim 0)
         lick_counts = lick_responses.sum(axis=2)  # shape: (n_units, n_events)
-        lick_window_s = (response_window_ms[1] - response_window_ms[0]) / 1000.0
+        lick_window_s = np.abs(response_window_ms[1] - response_window_ms[0]) / 1000.0
         lick_rates = lick_counts / lick_window_s  # Hz
         lick_rates_grouped = ndap.get_trial_changes(lick_rates, n_grouped_trials=n_grouped_trials)
         lick_rates_diff_grouped = ndap.get_trial_changes(lick_rates, n_grouped_trials=n_grouped_trials, n_baseline_trials=5)

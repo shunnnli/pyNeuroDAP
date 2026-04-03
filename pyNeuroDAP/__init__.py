@@ -85,6 +85,7 @@ from .plots import (
     plot_pca,
     plot_all_units,
     plot_distribution,
+    generate_boot_data,
 )
 
 from .gui import (
@@ -168,7 +169,8 @@ __all__ = [
     'plot_pca',
     'plot_all_units',
     'plot_distribution',
-    
+    'generate_boot_data',
+
     # GUI utilities
     'create_session_gui',
     'create_parameter_gui',

@@ -608,27 +608,103 @@ def _ecdf(x):
     return x, y
 
 
-def _bootstrap_null_mean(data, n_boot=5000, rng=None):
+def generate_boot_data(groups, n_boot=5000, random_state=0):
     """
-    Bootstrap a null distribution of the mean under H0: mean == 0
-    by centering the data before resampling.
+    Build the permutation-null bootstrap arrays that match NeuroDAP
+    ``plotCellEI.m`` / ``plotDistribution.m``.
+
+    MATLAB equivalent
+    -----------------
+    pooledIdx         = vertcat(groupIdx{:});
+    bootIdx           = mat2cell(1:length(pooledIdx), 1, pooledLengths);
+    pooledIdx_shuffled = ...  % (n_total x nboot) – each col is randperm
+    bs_data           = data(pooledIdx_shuffled);   % (n_total x nboot)
+
+    Parameters
+    ----------
+    groups : list of array-like
+        One 1-D array per group (finite values only).  Groups are pooled
+        and then randomly shuffled ``n_boot`` times.
+    n_boot : int
+        Number of permutation replicates (columns of ``boot_data``).
+    random_state : int or None
+        Seed for reproducibility.
+
+    Returns
+    -------
+    boot_data : ndarray, shape (n_total, n_boot)
+        Each column is the pooled data reindexed by one random permutation.
+    boot_idx : list of ndarray
+        ``boot_idx[g]`` are the *row* positions in ``boot_data`` that
+        correspond to group ``g`` (same size as ``groups[g]``).
+        Pass ``boot_data[boot_idx[g], :].mean(axis=0)`` to get the
+        permutation null for the mean of group ``g``.
+
+    Usage
+    -----
+    boot_data, boot_idx = generate_boot_data([group1, group2, group3])
+    plot_distribution(group1, boot_data=boot_data, boot_idx=boot_idx[0], ...)
+    plot_distribution(group2, boot_data=boot_data, boot_idx=boot_idx[1], ...)
+    plot_distribution(group3, boot_data=boot_data, boot_idx=boot_idx[2], ...)
+    """
+    arrays = [np.asarray(g, dtype=float).ravel() for g in groups]
+    arrays = [a[np.isfinite(a)] for a in arrays]
+    pooled = np.concatenate(arrays)
+    n_total = pooled.size
+    sizes = [a.size for a in arrays]
+
+    # Fixed positional index slices (same as MATLAB bootIdx = mat2cell(…))
+    cumsum = np.concatenate([[0], np.cumsum(sizes)])
+    boot_idx_list = [np.arange(cumsum[i], cumsum[i + 1]) for i in range(len(arrays))]
+
+    # Each column is one random permutation of the pooled indices
+    rng = np.random.default_rng(random_state)
+    perm_cols = np.stack([rng.permutation(n_total) for _ in range(n_boot)], axis=1)
+    boot_data = pooled[perm_cols]   # (n_total, n_boot)
+
+    return boot_data, boot_idx_list
+
+
+def _bootstrap_null_mean(data, n_boot=5000, rng=None,
+                         boot_data=None, boot_idx=None):
+    """
+    Compute the permutation-null distribution of the sample mean.
+
+    Two modes
+    ---------
+    **With** ``boot_data`` / ``boot_idx`` (matches ``plotDistribution.m``):
+        ``sim_avg = boot_data[boot_idx, :].mean(axis=0)``  (n_boot,)
+        i.e. column-wise mean of the shuffled pool restricted to this group.
+
+    **Without** (fallback – independent resample with replacement):
+        Draws ``n_boot`` bootstrap samples from ``data`` directly.
+
+    P-value (both modes):
+        ``pval = min(mean(sim_avg <= observed), mean(sim_avg >= observed))``
+        matching ``plotDistribution.m``.
     """
     x = np.asarray(data, dtype=float).ravel()
     x = x[np.isfinite(x)]
     if x.size == 0:
         raise ValueError("Input data contains no finite values.")
 
-    if rng is None:
-        rng = np.random.default_rng()
+    observed_mean = float(np.mean(x))
 
-    observed_mean = np.mean(x)
-    null_data = x - observed_mean
+    if boot_data is not None and boot_idx is not None:
+        # MATLAB path: column-wise mean over permuted pool rows for this group
+        sim_avg = np.asarray(boot_data)[np.asarray(boot_idx), :].mean(axis=0)
+    else:
+        # Fallback: standard nonparametric bootstrap of the mean
+        if rng is None:
+            rng = np.random.default_rng()
+        idx = rng.integers(0, x.size, size=(n_boot, x.size))
+        sim_avg = x[idx].mean(axis=1)
 
-    boot_idx = rng.integers(0, x.size, size=(n_boot, x.size))
-    null_means = null_data[boot_idx].mean(axis=1)
+    left_pval  = float(np.sum(sim_avg <= observed_mean) / sim_avg.size)
+    right_pval = float(np.sum(sim_avg >= observed_mean) / sim_avg.size)
+    pval = min(left_pval, right_pval)
 
-    p_two_sided = (np.sum(np.abs(null_means) >= abs(observed_mean)) + 1) / (n_boot + 1)
-    return observed_mean, null_means, p_two_sided
+    return observed_mean, sim_avg, pval
 
 
 def _p_to_stars(p):
@@ -679,6 +755,8 @@ def plot_distribution(
     label=None,
     color=None,
     ax=None,
+    boot_data=None,
+    boot_idx=None,
     n_boot=5000,
     nbins=60,
     xlabel="value",
@@ -698,11 +776,17 @@ def plot_distribution(
     Call repeatedly with the same `ax` to overlay multiple groups; state is
     initialised automatically on the first call for each target axes.
 
-    Usage
-    -----
+    Usage — with shared permutation null (matches MATLAB plotDistribution.m)
+    -------------------------------------------------------------------------
+    boot_data, boot_idx = ndap.generate_boot_data([group1, group2, group3])
+    plot_distribution(group1, boot_data=boot_data, boot_idx=boot_idx[0], ...)
+    plot_distribution(group2, boot_data=boot_data, boot_idx=boot_idx[1], ...)
+    plot_distribution(group3, boot_data=boot_data, boot_idx=boot_idx[2], ...)
+
+    Usage — without boot_data (independent bootstrap per group, fallback)
+    ----------------------------------------------------------------------
     plot_distribution(group1, ax=axs[1,1], ...)
     plot_distribution(group2, ax=axs[1,1], ...)
-    plot_distribution(group3, ax=axs[1,1], ...)
 
     If `ax` is a single axis, that axis is treated as a placeholder and replaced
     by two vertically stacked axes inside the same subplot slot.
@@ -717,8 +801,20 @@ def plot_distribution(
         Color for this condition.
     ax : None, Axes, or (Axes, Axes)
         Plot target.
+    boot_data : ndarray of shape (n_total, n_boot) or None
+        Shared permutation matrix from ``generate_boot_data()``.
+        Each column is the pooled data at one random permutation.
+        When provided together with ``boot_idx``, the p-value is computed
+        as in MATLAB ``plotDistribution.m``:
+        ``sim_avg = boot_data[boot_idx, :].mean(axis=0)``,
+        ``pval = min(mean(sim<=obs), mean(sim>=obs))``.
+    boot_idx : array-like of int or None
+        Row indices into ``boot_data`` for this group (from
+        ``generate_boot_data()``).  Must be provided together with
+        ``boot_data``.
     n_boot : int
-        Number of bootstrap samples.
+        Number of bootstrap replicates used only in the fallback path
+        (when ``boot_data`` is None).
     nbins : int
         Number of bins in the top histogram.
     xlabel : str
@@ -730,7 +826,7 @@ def plot_distribution(
     linewidth : float
         ECDF and mean-line width.
     random_state : int
-        Base seed for reproducibility.
+        Base seed for reproducibility (fallback path only).
     figsize : tuple
         Used only when ax=None.
     height_ratios : tuple
@@ -777,6 +873,8 @@ def plot_distribution(
             "datasets": [],
             "labels": [],
             "colors": [],
+            "boot_data_list": [],
+            "boot_idx_list": [],
             "fig": fig,
             "ax_top": ax_top,
             "ax_bottom": ax_bottom,
@@ -801,6 +899,8 @@ def plot_distribution(
     state["datasets"].append(x)
     state["labels"].append(label)
     state["colors"].append(color)
+    state["boot_data_list"].append(boot_data)
+    state["boot_idx_list"].append(boot_idx)
 
     # Redraw from scratch using all accumulated groups
     ax_top.clear()
@@ -810,14 +910,17 @@ def plot_distribution(
     all_null_means = []
     all_raw = []
 
-    for i, (group_data, group_label, group_color) in enumerate(
-        zip(state["datasets"], state["labels"], state["colors"])
+    for i, (group_data, group_label, group_color, g_boot_data, g_boot_idx) in enumerate(
+        zip(state["datasets"], state["labels"], state["colors"],
+            state["boot_data_list"], state["boot_idx_list"])
     ):
         rng = np.random.default_rng(random_state + i)
         observed_mean, null_means, p_value = _bootstrap_null_mean(
             group_data,
             n_boot=n_boot,
             rng=rng,
+            boot_data=g_boot_data,
+            boot_idx=g_boot_idx,
         )
         summaries.append({
             "data": group_data,
