@@ -41,12 +41,12 @@ import pyNeuroDAP as ndap
 # Sessions to process  (mirrors the commented list in the notebook)
 # ---------------------------------------------------------------------------
 all_sessions = [
-    # '20251202-SL412-Random1_g0',
-    # '20251203-SL412-Random2_g0',
-    # '20251205-SL412-Random3_g0',
-    # '20251206-SL412-Random4_g0',
-    # '20251207-SL412-Reward1_g0',
-    # '20251208-SL412-Reward2_g0',
+    '20251202-SL412-Random1_g0',
+    '20251203-SL412-Random2_g0',
+    '20251205-SL412-Random3_g0',
+    '20251206-SL412-Random4_g0',
+    '20251207-SL412-Reward1_g0',
+    '20251208-SL412-Reward2_g0',
     '20251209-SL412-Reward3_g0',
     '20251210-SL412-Reward4_g0',
     '20251211-SL412-Punish1_g0',
@@ -907,7 +907,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
 # ---------------------------------------------------------------------------
 all_results = []
 for session_name in all_sessions:
-    res = process_session(session_name, plot_all_units=True)
+    res = process_session(session_name, plot_all_units=False)
     all_results.append(res)
 
 # ---------------------------------------------------------------------------
