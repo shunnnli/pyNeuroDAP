@@ -826,26 +826,42 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
     }, analysis_filepath, key='metadata')
 
     # Event onset times (seconds)
-    ndap.save_variables({
-        'blueLaser_onsets':  blueLaser_onsets,
-        'redLaser_onsets':   redLaser_onsets,
-        'water_onsets':      water_onsets,
-        'tone_onsets':       tone_onsets,
-        'lick_onsets':       lick_onsets,
-        'airpuff_onsets':    airpuff_onsets,
-        'water_lick_onsets': water_lick_onsets,
-        'optotag_onsets':    optotag_onsets,
-        'tone_only_onsets':  tone_only_onsets,
-        'opto_only_onsets':  opto_only_onsets,
-        'pair_onsets':       pair_onsets,
-        'water_lick_onsets_baseline': water_lick_onsets_baseline,
-        'tone_onsets_baseline': tone_onsets_baseline,
-        'airpuff_onsets_baseline': airpuff_onsets_baseline,
-        'redLaser_onsets_baseline': redLaser_onsets_baseline,
-        'opto_only_onsets_baseline': opto_only_onsets_baseline,
-        'tone_only_onsets_baseline': tone_only_onsets_baseline,
-        'pair_onsets_baseline': pair_onsets_baseline,
-    }, analysis_filepath, key='event_times')
+    if 'RANDOM' in session_name.upper():
+        ndap.save_variables({
+            'blueLaser_onsets':  blueLaser_onsets,
+            'redLaser_onsets':   redLaser_onsets,
+            'water_onsets':      water_onsets,
+            'tone_onsets':       tone_onsets,
+            'lick_onsets':       lick_onsets,
+            'airpuff_onsets':    airpuff_onsets,
+            'water_lick_onsets': water_lick_onsets,
+            'optotag_onsets':    optotag_onsets,
+            'water_lick_onsets_baseline': water_lick_onsets_baseline,
+            'tone_onsets_baseline': tone_onsets_baseline,
+            'airpuff_onsets_baseline': airpuff_onsets_baseline,
+            'redLaser_onsets_baseline': redLaser_onsets_baseline,
+        }, analysis_filepath, key='event_times')
+    else:
+        ndap.save_variables({
+            'blueLaser_onsets':  blueLaser_onsets,
+            'redLaser_onsets':   redLaser_onsets,
+            'water_onsets':      water_onsets,
+            'tone_onsets':       tone_onsets,
+            'lick_onsets':       lick_onsets,
+            'airpuff_onsets':    airpuff_onsets,
+            'water_lick_onsets': water_lick_onsets,
+            'optotag_onsets':    optotag_onsets,
+            'tone_only_onsets':  tone_only_onsets,
+            'opto_only_onsets':  opto_only_onsets,
+            'pair_onsets':       pair_onsets,
+            'water_lick_onsets_baseline': water_lick_onsets_baseline,
+            'tone_onsets_baseline': tone_onsets_baseline,
+            'airpuff_onsets_baseline': airpuff_onsets_baseline,
+            'redLaser_onsets_baseline': redLaser_onsets_baseline,
+            'opto_only_onsets_baseline': opto_only_onsets_baseline,
+            'tone_only_onsets_baseline': tone_only_onsets_baseline,
+            'pair_onsets_baseline': pair_onsets_baseline,
+        }, analysis_filepath, key='event_times')
 
     # Unit info
     ndap.save_variables({
@@ -869,7 +885,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
 # ---------------------------------------------------------------------------
 all_results = []
 for session_name in all_sessions:
-    res = process_session(session_name, plot_all_units=False)
+    res = process_session(session_name, plot_all_units=True)
     all_results.append(res)
 
 # ---------------------------------------------------------------------------
