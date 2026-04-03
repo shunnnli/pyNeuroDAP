@@ -45,8 +45,8 @@ all_sessions = [
     # '20251203-SL412-Random2_g0',
     # '20251205-SL412-Random3_g0',
     # '20251206-SL412-Random4_g0',
-    '20251207-SL412-Reward1_g0',
-    '20251208-SL412-Reward2_g0',
+    # '20251207-SL412-Reward1_g0',
+    # '20251208-SL412-Reward2_g0',
     '20251209-SL412-Reward3_g0',
     '20251210-SL412-Reward4_g0',
     '20251211-SL412-Punish1_g0',
@@ -603,7 +603,13 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
 
         # Plot distribution of slope (event_rates_diff_grouped vs trial)
         finite_slopes = event_rates_slopes[np.isfinite(event_rates_slopes)]
-        ndap.plot_distribution(finite_slopes, title=f'Distribution of slope (grouped every {n_grouped_trials} trials)', ax=axs[0,2])
+        if finite_slopes.size > 0:
+            ndap.plot_distribution(finite_slopes, title=f'Distribution of slope (grouped every {n_grouped_trials} trials)', ax=axs[0,2])
+        else:
+            axs[0,2].text(0.5, 0.5, 'No finite slopes', ha='center', va='center', transform=axs[0,2].transAxes)
+            axs[0,2].set_xlabel('Slope')
+            axs[0,2].set_ylabel('Count')
+            axs[0,2].set_title(f'Distribution of slope (grouped every {n_grouped_trials} trials)')
 
         # Plot groupedmodulation index (averaged every n_grouped_trials)
         for i, unit_id in enumerate(good_unit_ids):
@@ -629,7 +635,13 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
 
         # Plot distribution of slope (mod_index_slopes vs trial)
         finite_slopes = mod_index_slopes[np.isfinite(mod_index_slopes)]
-        ndap.plot_distribution(finite_slopes, title=f'Distribution of slope (grouped every {n_grouped_trials} trials)', ax=axs[1,2])
+        if finite_slopes.size > 0:
+            ndap.plot_distribution(finite_slopes, title=f'Distribution of slope (grouped every {n_grouped_trials} trials)', ax=axs[1,2])
+        else:
+            axs[1,2].text(0.5, 0.5, 'No finite slopes', ha='center', va='center', transform=axs[1,2].transAxes)
+            axs[1,2].set_xlabel('Slope')
+            axs[1,2].set_ylabel('Count')
+            axs[1,2].set_title(f'Distribution of slope (grouped every {n_grouped_trials} trials)')
 
         plt.tight_layout()
         plt.savefig(os.path.join(save_folder, f'trials_spikes_{event_name}.pdf'), dpi=300, bbox_inches='tight')
@@ -777,7 +789,13 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
 
         # Plot distribution of slope (lick_rates_diff_grouped vs trial)
         finite_slopes = lick_rates_slopes[np.isfinite(lick_rates_slopes)]
-        ndap.plot_distribution(finite_slopes, title=f'Distribution of slope (grouped every {n_grouped_trials} trials)', ax=axs[0,2])
+        if finite_slopes.size > 0:
+            ndap.plot_distribution(finite_slopes, title=f'Distribution of slope (grouped every {n_grouped_trials} trials)', ax=axs[0,2])
+        else:
+            axs[0,2].text(0.5, 0.5, 'No finite slopes', ha='center', va='center', transform=axs[0,2].transAxes)
+            axs[0,2].set_xlabel('Slope')
+            axs[0,2].set_ylabel('Count')
+            axs[0,2].set_title(f'Distribution of slope (grouped every {n_grouped_trials} trials)')
 
 
         # Plot grouped modulation index (averaged every n_grouped_trials)
@@ -802,7 +820,13 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
 
         # Plot distribution of slope (mod_index_slopes vs trial)
         finite_slopes = mod_index_slopes[np.isfinite(mod_index_slopes)]
-        ndap.plot_distribution(finite_slopes, title=f'Distribution of slope (grouped every {n_grouped_trials} trials)', ax=axs[1,2])
+        if finite_slopes.size > 0:
+            ndap.plot_distribution(finite_slopes, title=f'Distribution of slope (grouped every {n_grouped_trials} trials)', ax=axs[1,2])
+        else:
+            axs[1,2].text(0.5, 0.5, 'No finite slopes', ha='center', va='center', transform=axs[1,2].transAxes)
+            axs[1,2].set_xlabel('Slope')
+            axs[1,2].set_ylabel('Count')
+            axs[1,2].set_title(f'Distribution of slope (grouped every {n_grouped_trials} trials)')
 
         plt.tight_layout()
         plt.savefig(os.path.join(save_folder, f'trials_licks_{event_name}.pdf'), dpi=300, bbox_inches='tight')
