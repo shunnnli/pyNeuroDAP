@@ -685,6 +685,7 @@ def plot_distribution(
     height_ratios=(1, 3),
     hspace=0.35,
     show_legend=False,
+    title=None,
 ):
     """
     Add one distribution to a shared 2-panel plot.
@@ -733,6 +734,8 @@ def plot_distribution(
         Vertical spacing between top and bottom panels.
     show_legend : bool
         Whether to show the legend on the bottom panel.
+    title : str or None
+        If set, applied as the upper panel title.
 
     Returns
     -------
@@ -899,6 +902,9 @@ def plot_distribution(
 
     if show_legend:
         ax_bottom.legend(frameon=False)
+
+    if title is not None:
+        ax_top.set_title(title)
 
     fig.canvas.draw_idle()
     return fig, (ax_top, ax_bottom)
