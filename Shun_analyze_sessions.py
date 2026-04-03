@@ -368,7 +368,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
                     spikes, tone_onsets, (-0.5, 2), plot_style='raster',
                     good_units=good_units, good_unit_ids=good_unit_ids,
                     same_system=False, params=params, bin_size_ms=5,
-                    event_color='tab:orange', event_duration=0.2, event_label='tone',
+                    event_color='tab:orange', event_duration=0.5, event_label='tone',
                     save_figure=True, save_folder=save_folder,
                 )
                 plt.close('all')
@@ -418,7 +418,7 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
                     spikes, tone_only_onsets, (-0.5, 2), plot_style='raster',
                     good_units=good_units, good_unit_ids=good_unit_ids,
                     same_system=False, params=params, bin_size_ms=5,
-                    event_color='tab:orange', event_duration=0.2, event_label='tone_only',
+                    event_color='tab:orange', event_duration=0.5, event_label='tone_only',
                     save_figure=True, save_folder=save_folder,
                 )
                 plt.close('all')
@@ -450,7 +450,8 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
     # ------------------------------------------------------------------
     bin_size_ms = 5
     time_range = (-1, 2)
-    response_window_ms = (0, 1000)
+    response_window_ms = (0, 500)
+    baseline_window_ms = (-500, 0)
     xaxis = ndap.get_time_axis(time_range=time_range, bin_size_ms=bin_size_ms)
     n_grouped_trials = 10
 
@@ -506,9 +507,6 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
             )
 
         # Compute per-unit modulation index for the same event using the aligned spikes above
-        baseline_window_ms = (-1000, 0)
-        response_window_ms = (0, 1000)
-
         mod_results = ndap.get_event_modulation(
             event_aligned,
             baseline_window=baseline_window_ms,
@@ -603,8 +601,6 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
     # Plot lick raster for all events (one figure, one column per event)
     # ------------------------------------------------------------------
     bin_size_ms = 100
-    time_range = (-1, 2)
-    response_window_ms = (0, 1000)
     xaxis = ndap.get_time_axis(time_range=time_range, bin_size_ms=bin_size_ms)
     n_grouped_trials = 10
     
@@ -685,9 +681,6 @@ def process_session(session_name: str, plot_all_units: bool = True) -> dict:
             )
 
         # Compute per-unit modulation index for the same event using the aligned spikes above
-        baseline_window_ms = (-1000, 0)
-        response_window_ms = (0, 1000)
-
         mod_results = ndap.get_event_modulation(
             lick_aligned,
             baseline_window=baseline_window_ms,

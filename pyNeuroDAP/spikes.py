@@ -11,6 +11,8 @@ def get_spikes(spikes, event_times,
                     same_system=True,
                     params=None,
                     include_units=None,
+                    remove_event_artifacts=True,
+                    event_duration=None,     # seconds
                     subtract_baseline_spikes=False,
                     verbose=False):
 
@@ -130,6 +132,18 @@ def get_spikes(spikes, event_times,
         if not np.any(keep):
             continue
         bins = bins[keep]; ui = ui[keep]; s = s[keep]
+
+        # remove artifact spikes at exact event onset and (optionally) offset
+        if remove_event_artifacts:
+            artifact = (s == centers[j])
+            if event_duration is not None:
+                offset_samp = centers[j] + int(np.round(event_duration * ap_fs))
+                artifact |= (s == offset_samp)
+            if np.any(artifact):
+                keep2 = ~artifact
+                bins = bins[keep2]; ui = ui[keep2]; s = s[keep2]
+            if not s.size:
+                continue
 
         # accumulate counts
         # Index all 3 dimensions: (units, events, bins)
