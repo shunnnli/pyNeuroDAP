@@ -102,6 +102,16 @@ from .mat import (
     convert_behaviors_from_mat
 )
 
+from .slice import (
+    load_cells_table,
+    index_results_folder,
+    load_spots_depth_mat,
+    results_to_long_dataframe,
+    get_spot_response,
+    analyze_dmd_search,
+    analyze_dmd_search_pair,
+)
+
 # Define what gets imported with "from pyNeuroDAP import *"
 __all__ = [
     # Core spike analysis
@@ -181,5 +191,14 @@ __all__ = [
     'load_mat',
     'convert_params_from_mat',
     'convert_spikes_from_mat',
-    'convert_behaviors_from_mat'
+    'convert_behaviors_from_mat',
+
+    # DMD slice analysis
+    'load_cells_table',
+    'index_results_folder',
+    'load_spots_depth_mat',
+    'results_to_long_dataframe',
+    'get_spot_response',
+    'analyze_dmd_search',
+    'analyze_dmd_search_pair',
 ]
