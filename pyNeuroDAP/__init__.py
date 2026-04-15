@@ -97,6 +97,7 @@ from .gui import (
 
 from .mat import (
     load_mat,
+    load_timeseries_mat,
     convert_params_from_mat,
     convert_spikes_from_mat,
     convert_behaviors_from_mat
@@ -189,6 +190,7 @@ __all__ = [
     
     # MATLAB file utilities
     'load_mat',
+    'load_timeseries_mat',
     'convert_params_from_mat',
     'convert_spikes_from_mat',
     'convert_behaviors_from_mat',

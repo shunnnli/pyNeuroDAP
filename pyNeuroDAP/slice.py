@@ -1026,10 +1026,43 @@ def analyze_dmd_search(
     if isinstance(epochs, list) and search_idx < len(epochs):
         search_name = epochs[search_idx]
 
-    # Colors
-    stim_color = (0.8, 0.2, 0.2) if red_stim else (0.2, 0.4, 0.8)
+    # Fixed palette
     blue = (0.2, 0.4, 0.8)
     red = (0.8, 0.2, 0.2)
+    purple = (0.91, 0.51, 0.98)
+    stim_color = red if red_stim else blue
+
+    # Voltage-dependent hotspot trace color (MATLAB: blueWhiteRed end/start/purple)
+    vhold = None
+    vhold_raw = cell_row.get("Vhold") if hasattr(cell_row, "get") else None
+    if vhold_raw is None:
+        try:
+            vhold_raw = cell_row["Vhold"]
+        except (KeyError, TypeError):
+            pass
+    if vhold_raw is not None:
+        vhold_list = _normalize_search_list(vhold_raw)
+        if search_idx < len(vhold_list):
+            vhold = _safe_scalar(vhold_list[search_idx])
+    if vhold is not None:
+        color = red if vhold < -50 else (blue if vhold > -10 else purple)
+    else:
+        color = stim_color  # fallback
+
+    # Try to load noise model (noise_cell<N>.mat) for the histogram panel
+    noise_data = None
+    if results_dir is not None:
+        import scipy.io as _sio
+        _exp_path = Path(results_dir).parent
+        _noise_file = _exp_path / f"noise_cell{cell}.mat"
+        if _noise_file.exists():
+            try:
+                _nm = _sio.loadmat(str(_noise_file))
+                _nd = _nm.get("allNullData")
+                if _nd is not None:
+                    noise_data = np.asarray(_nd).flatten()
+            except Exception:
+                pass
 
     output = {"depth_results": [], "metrics_df": None, "figures": []}
     all_metrics = []
@@ -1124,17 +1157,66 @@ def analyze_dmd_search(
             for s in range(n_spots)
         ]) if ctrl_sliced.shape[0] > 0 else np.zeros(n_spots)
 
-        # Per-spot max/min
+        # Per-spot max/min current (mean trace)
         spot_max = np.array([
             np.nanmax(np.nanmean(opto_sliced[spot_sequence == s], axis=0))
-            if np.any(spot_sequence == s) else 0.0
+            if np.any(spot_sequence == s) else np.nan
             for s in range(n_spots)
         ])
         spot_min = np.array([
             np.nanmin(np.nanmean(opto_sliced[spot_sequence == s], axis=0))
-            if np.any(spot_sequence == s) else 0.0
+            if np.any(spot_sequence == s) else np.nan
             for s in range(n_spots)
         ])
+
+        # Time to max/min on mean opto trace (ms from stim onset)
+        spot_max_time = np.array([
+            np.argmax(np.nanmean(opto_sliced[spot_sequence == s], axis=0)) / spm
+            if np.any(spot_sequence == s) else np.nan
+            for s in range(n_spots)
+        ])
+        spot_min_time = np.array([
+            np.argmin(np.nanmean(opto_sliced[spot_sequence == s], axis=0)) / spm
+            if np.any(spot_sequence == s) else np.nan
+            for s in range(n_spots)
+        ])
+
+        # Per-spot ctrl max/min (global max/min across all sweeps for that spot)
+        if ctrl_sliced.shape[0] > 0:
+            ctrl_max_arr = np.array([
+                np.nanmax(ctrl_sliced[spot_sequence == s])
+                if np.any(spot_sequence == s) else np.nan
+                for s in range(n_spots)
+            ])
+            ctrl_min_arr = np.array([
+                np.nanmin(ctrl_sliced[spot_sequence == s])
+                if np.any(spot_sequence == s) else np.nan
+                for s in range(n_spots)
+            ])
+            ctrl_max_time_arr = np.array([
+                np.argmax(np.nanmean(ctrl_sliced[spot_sequence == s], axis=0)) / spm
+                if np.any(spot_sequence == s) else np.nan
+                for s in range(n_spots)
+            ])
+            ctrl_min_time_arr = np.array([
+                np.argmin(np.nanmean(ctrl_sliced[spot_sequence == s], axis=0)) / spm
+                if np.any(spot_sequence == s) else np.nan
+                for s in range(n_spots)
+            ])
+        else:
+            ctrl_max_arr = ctrl_min_arr = ctrl_max_time_arr = ctrl_min_time_arr = np.full(n_spots, np.nan)
+
+        # Absolute AUC (per sweep, then averaged per spot)
+        spot_abs_auc = np.array([
+            np.nanmean(np.sum(np.abs(opto_sliced[spot_sequence == s]), axis=1)) / output_fs
+            if np.any(spot_sequence == s) else np.nan
+            for s in range(n_spots)
+        ])
+        ctrl_abs_auc = np.array([
+            np.nanmean(np.sum(np.abs(ctrl_sliced[spot_sequence == s]), axis=1)) / output_fs
+            if np.any(spot_sequence == s) else np.nan
+            for s in range(n_spots)
+        ]) if ctrl_sliced.shape[0] > 0 else np.full(n_spots, np.nan)
 
         # Peak-based response rate
         min_peak_dist = max(1, round(2 * spm))
@@ -1191,16 +1273,36 @@ def analyze_dmd_search(
             "response_map": depth_resp_map,
             "cur_full": cur_full,
             "hot_full": hot_full,
+            # AUC / charge
             "spot_auc": spot_auc,
             "ctrl_auc": ctrl_auc,
+            "spot_abs_auc": spot_abs_auc,
+            "ctrl_abs_auc": ctrl_abs_auc,
+            # Peak current
             "spot_max": spot_max,
             "spot_min": spot_min,
+            "spot_max_time": spot_max_time,
+            "spot_min_time": spot_min_time,
+            # Control baseline
+            "ctrl_max": ctrl_max_arr,
+            "ctrl_min": ctrl_min_arr,
+            "ctrl_max_time": ctrl_max_time_arr,
+            "ctrl_min_time": ctrl_min_time_arr,
+            # Response rates
             "e_rate": e_rate,
             "i_rate": i_rate,
             "e_rate_ctrl": e_rate_ctrl,
             "i_rate_ctrl": i_rate_ctrl,
+            # Thresholds + voltage info
             "ethres": ethres,
             "ithres": ithres,
+            "vhold": vhold,
+            # Colors (voltage-dependent)
+            "color": color,
+            "stim_color": stim_color,
+            "blue": blue,
+            "red": red,
+            "feature": feature,
         }
         output["depth_results"].append(depth_result)
 
@@ -1208,7 +1310,7 @@ def analyze_dmd_search(
         if make_plots:
             fig = _plot_search_depth(
                 depth_result, alignment, time_range_ms,
-                stim_color=stim_color, blue=blue, red=red,
+                noise_data=noise_data,
                 cell_num=cell, search_name=search_name,
             )
             output["figures"].append(fig)
@@ -1269,76 +1371,86 @@ def _compute_response_rates(
     return e_rate, i_rate
 
 
+def _despine(ax):
+    """Remove top and right spines from an axes."""
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
 def _plot_search_depth(
     dr: dict, alignment: dict, time_range_ms: tuple,
-    stim_color=(0.8, 0.2, 0.2), blue=(0.2, 0.4, 0.8), red=(0.8, 0.2, 0.2),
+    noise_data=None,
     cell_num=None, search_name=None,
+    stim_duration_ms: float = 5.0,
 ):
     """
-    Generate a summary figure for one depth of one search.
+    Generate the 10-panel summary figure for one depth of one search.
 
-    Layout (4x4 master grid):
-      [0:4, 0:2] — tiled trace grid
-      [0:2, 2]   — response map image
-      [0:2, 3]   — opto vs baseline trace
-      [2:4, 2]   — noise vs response histogram
-      [2:4, 3]   — summary statistics (scatter-bar)
+    Mirrors the MATLAB tiledlayout(4,4) layout in analyzeDMDSearch.m:
+      [:4, 0:2] — tiled trace grid  (tiles 1-8 in MATLAB)
+      [0:2,  2] — response map + colorbar  (tile 3, span [2,1])
+      [0,    3] — opto vs baseline trace   (tile 4)
+      [1,    3] — noise vs response histogram  (tile 8)
+      [2,  2:4] — stats row 1: max currents, net AUC, abs AUC  (tile 11, span [1,2])
+      [3,  2:4] — stats row 2: timing, response rates  (tile 15, span [1,2])
     """
+    # ── Unpack ─────────────────────────────────────────────────────────────
     depth_val = dr["depth"]
     opto_data = dr["opto_data"]
     ctrl_data = dr["ctrl_data"]
+    color     = dr["color"]
+    blue      = dr["blue"]
+    red       = dr["red"]
+    stim_color = dr["stim_color"]
+    vhold     = dr.get("vhold")
+    ethres    = dr["ethres"]
+    ithres    = dr["ithres"]
+    hs_mask   = dr["hotspot_spot_idx"]
+    ns_mask   = ~hs_mask
+    sweep_hs  = dr["hotspot_sweep_idx"]
+    cur_full  = dr["cur_full"]
+    hot_full  = dr["hot_full"]
+    resp_map  = dr["response_map"]
+
     aw = alignment["analysis_window"]
     aw = aw[aw < opto_data.shape[1]]
-    pf = alignment["plot_first"] - 1  # 0-indexed
+    pf = alignment["plot_first"] - 1
     pl = alignment["plot_last"]
     plot_time = alignment["plot_time"]
     spm = alignment["samples_per_ms"]
-    ethres = dr["ethres"]
-    ithres = dr["ithres"]
-    hotspot_spot_idx = dr["hotspot_spot_idx"]
-    hotspot_sweep_idx = dr["hotspot_sweep_idx"]
-    spot_sequence = dr["spot_sequence"]
-    cur_full = dr["cur_full"]
-    hot_full = dr["hot_full"]
-    resp_map = dr["response_map"]
 
-    n_col = 2**depth_val
-    n_row = 2**depth_val
+    n_col  = 2**depth_val
+    n_row  = 2**depth_val
     n_full = 4**depth_val
 
     opto_sliced = opto_data[:, aw]
-    opto_time = np.arange(opto_sliced.shape[1]) / spm
-
-    ctrl_end = ctrl_data.shape[1]
-    ctrl_len = min(len(aw), ctrl_end)
+    opto_time   = np.arange(opto_sliced.shape[1]) / spm
+    ctrl_end    = ctrl_data.shape[1]
+    ctrl_len    = min(len(aw), ctrl_end)
     ctrl_sliced = ctrl_data[:, ctrl_end - ctrl_len : ctrl_end]
-    ctrl_time = np.arange(-ctrl_len, 0) / spm
+    ctrl_time   = np.arange(-ctrl_len, 0) / spm
 
     y_lo, y_hi = _get_ylimit(
         opto_sliced,
         ethres=ethres if ethres is not None else np.nan,
         ithres=ithres if ithres is not None else np.nan,
     )
+    hotspot_data = opto_sliced[sweep_hs]  if np.any(sweep_hs)  else np.empty((0, opto_sliced.shape[1]))
+    nullspot_data = opto_sliced[~sweep_hs] if np.any(~sweep_hs) else np.empty((0, opto_sliced.shape[1]))
 
-    hotspot_data = opto_sliced[hotspot_sweep_idx] if np.any(hotspot_sweep_idx) else np.empty((0, opto_sliced.shape[1]))
-    nullspot_data = opto_sliced[~hotspot_sweep_idx] if np.any(~hotspot_sweep_idx) else np.empty((0, opto_sliced.shape[1]))
+    lw = max(0.2, min(3, 3.0 * (4 / max(n_full, 1)) ** 0.3))
 
-    # Line width scaling
-    lw_ref = 3.0
-    n_tiles = n_row * n_col
-    lw = lw_ref * (4 / max(n_tiles, 1)) ** 0.3
-    lw = max(0.2, min(3, lw))
+    # ── Figure ─────────────────────────────────────────────────────────────
+    fig = plt.figure(figsize=(24, 16), constrained_layout=True)
+    gs = GridSpec(4, 4, figure=fig)
 
-    fig = plt.figure(figsize=(18, 14))
-    gs_master = GridSpec(4, 4, figure=fig, hspace=0.4, wspace=0.35)
-
-    # --- Tiled trace grid ---
-    gs_traces = gs_master[:4, :2].subgridspec(n_row, n_col, hspace=0.05, wspace=0.05)
+    # ── 1. Tiled trace grid [:4, :2] ───────────────────────────────────────
+    gs_traces = gs[:4, :2].subgridspec(n_row, n_col, hspace=0.05, wspace=0.05)
     for t in range(n_full):
         ax = fig.add_subplot(gs_traces[t // n_col, t % n_col])
         spot_data = cur_full[t]
-        spot_hs = hot_full[t]
-        is_hs = False
+        spot_hs   = hot_full[t]
+        is_hs     = False
         if spot_hs is not None:
             is_hs = bool(np.any(np.asarray(spot_hs) >= 1))
 
@@ -1346,131 +1458,240 @@ def _plot_search_depth(
             arr = np.atleast_2d(spot_data) if spot_data.ndim == 1 else spot_data
             if arr.ndim == 2 and arr.shape[0] > arr.shape[1]:
                 arr = arr.T
-            # Slice to plot window
             trace = arr[:, pf:pl] if pl <= arr.shape[1] else arr
-            trace_time = plot_time[:trace.shape[1]]
-
-            alpha = 1.0 if is_hs else 0.3
-            color = stim_color if is_hs else (0.5, 0.5, 0.5)
             if trace.shape[0] > 0:
-                plot_sem(trace, x=trace_time, color=color, alpha=alpha,
+                spot_color = color if is_hs else (0.5, 0.5, 0.5)
+                plot_sem(trace, x=plot_time[:trace.shape[1]],
+                         color=spot_color, alpha=1.0 if is_hs else 0.3,
                          ax=ax, plot_individual=True)
-        else:
-            trace_time = plot_time
 
         ax.set_xlim(time_range_ms)
         ax.set_ylim(y_lo, y_hi)
-        # Stim shading
-        ax.axvspan(0, 5, alpha=0.15, color=stim_color, edgecolor="none")
-        # Thresholds
-        if ethres is not None:
-            ax.axhline(ethres, ls="--", color=red, alpha=0.4, lw=max(0.2, lw - 1))
-        if ithres is not None:
-            ax.axhline(ithres, ls="--", color=blue, alpha=0.4, lw=max(0.2, lw - 1))
-        # Only show axis labels on bottom-left tile
-        if t == (n_row - 1) * n_col:
+        ax.axvspan(0, stim_duration_ms, alpha=0.15, facecolor=stim_color, edgecolor="none")
+        # Threshold lines depend on voltage
+        if vhold is not None and vhold < -50:
+            if ethres is not None:
+                ax.axhline(ethres, ls="--", color=red,  alpha=0.4, lw=max(0.2, lw - 1))
+        elif vhold is not None and vhold > -10:
+            if ithres is not None:
+                ax.axhline(ithres, ls="--", color=blue, alpha=0.4, lw=max(0.2, lw - 1))
+        else:
+            if ethres is not None:
+                ax.axhline(ethres, ls="--", color=red,  alpha=0.4, lw=max(0.2, lw - 1))
+            if ithres is not None:
+                ax.axhline(ithres, ls="--", color=blue, alpha=0.4, lw=max(0.2, lw - 1))
+
+        if t == (n_row - 1) * n_col:   # bottom-left tile only
             ax.set_xlabel("ms", fontsize=7)
             ax.set_ylabel("pA", fontsize=7)
             ax.tick_params(labelsize=5)
+            ax.set_xticks([0, 50])
+            _despine(ax)
         else:
-            ax.set_xticks([])
-            ax.set_yticks([])
-            for spine in ax.spines.values():
-                spine.set_visible(False)
+            ax.set_xticks([]); ax.set_yticks([])
+            for sp in ax.spines.values():
+                sp.set_visible(False)
 
-    # --- Response map image ---
-    ax_rmap = fig.add_subplot(gs_master[0:2, 2])
+    # ── 2. Response map [0:2, 2] + colorbar ───────────────────────────────
+    # aspect="auto" fills the entire allocated axes so the colorbar is
+    # exactly the same height as the heatmap (no blank padding above/below).
+    ax_rmap = fig.add_subplot(gs[0:2, 2])
     if resp_map is not None and isinstance(resp_map, np.ndarray) and resp_map.ndim == 2:
-        im = ax_rmap.imshow(resp_map, cmap="RdBu_r", aspect="auto")
-        fig.colorbar(im, ax=ax_rmap, fraction=0.046, pad=0.04, label="Total charge (pC)")
-    ax_rmap.set_title(f"Depth {depth_val}: response map", fontsize=9)
-    ax_rmap.axis("off")
+        _vm = max(np.nanmax(np.abs(resp_map)), 1e-9)
+        im  = ax_rmap.imshow(resp_map.T, cmap="RdBu_r", aspect="auto",
+                             vmin=-_vm, vmax=_vm, origin="upper")
+        fig.colorbar(im, ax=ax_rmap, fraction=0.05, pad=0.02,
+                     label="Total charge (pC)")
+    ax_rmap.set_title(f"Depth {depth_val}: {dr.get('feature', 'auc')}", fontsize=9)
+    ax_rmap.set_xticks([]); ax_rmap.set_yticks([])
+    for sp in ax_rmap.spines.values():
+        sp.set_visible(False)
 
-    # --- Opto vs baseline trace ---
-    ax_trace = fig.add_subplot(gs_master[0:2, 3])
+    # ── 3. Opto vs baseline trace [0, 3] ──────────────────────────────────
+    ax_trace = fig.add_subplot(gs[0, 3])
     if ctrl_sliced.shape[0] > 0 and ctrl_len > 0:
         n_show = min(200, ctrl_len)
         plot_sem(ctrl_sliced[:, -n_show:], x=ctrl_time[-n_show:],
-                 color=(0.8, 0.8, 0.8), ax=ax_trace, plot_individual=True,
-                 label="Baseline")
+                 color=(0.8, 0.8, 0.8), ax=ax_trace, plot_individual=True, label="Baseline")
     if nullspot_data.shape[0] > 0:
         plot_sem(nullspot_data, x=opto_time[:nullspot_data.shape[1]],
-                 color=(0.6, 0.6, 0.6), ax=ax_trace, plot_individual=True,
-                 label="Nullspot")
+                 color=(0.6, 0.6, 0.6), ax=ax_trace, plot_individual=True, label="Nullspot")
     if hotspot_data.shape[0] > 0:
         plot_sem(hotspot_data, x=opto_time[:hotspot_data.shape[1]],
-                 color=stim_color, ax=ax_trace, plot_individual=True,
-                 label="Hotspot")
+                 color=color, ax=ax_trace, plot_individual=True, label="Hotspot")
     ax_trace.set_xlabel("Time from stim (ms)", fontsize=8)
     ax_trace.set_ylabel("pA", fontsize=8)
     ax_trace.set_ylim(y_lo, y_hi)
     ax_trace.legend(fontsize=6, loc="best")
-    ax_trace.set_title(f"Depth {depth_val}: opto vs baseline", fontsize=9)
+    ax_trace.set_title(f"Depth {depth_val}: opto vs baseline trace", fontsize=9)
+    _despine(ax_trace)
 
-    # --- Statistics scatter-bar ---
-    ax_stats = fig.add_subplot(gs_master[2, 2:4])
-    n_spots = len(hotspot_spot_idx)
-    hs_mask = hotspot_spot_idx
-    ns_mask = ~hotspot_spot_idx
-
-    groups = []
-    labels = []
-    colors = []
-    if np.any(hs_mask):
-        groups.append(dr["spot_auc"][hs_mask].tolist())
-        labels.append("Hotspot")
-        colors.append((*red, 0.8))
+    # ── 4. Noise vs response histogram [1, 3] ─────────────────────────────
+    # Use allNullData if available; fall back to all baseline (ctrl) samples.
+    ax_hist = fig.add_subplot(gs[1, 3])
+    if noise_data is not None and len(noise_data) > 0:
+        _hdata = noise_data
+    elif ctrl_sliced.shape[0] > 0:
+        _hdata = ctrl_sliced.flatten()   # all pre-stim samples = noise proxy
+    else:
+        _hdata = None
+    if _hdata is not None:
+        _nbins = min(60, max(15, len(_hdata) // 20))
+        ax_hist.hist(_hdata, bins=_nbins, density=True,
+                     color=(0.8, 0.8, 0.8), edgecolor=(0.8, 0.8, 0.8))
+    # Nullspot max/min (dotted)
     if np.any(ns_mask):
-        groups.append(dr["spot_auc"][ns_mask].tolist())
-        labels.append("Nullspot")
-        colors.append((0.6, 0.6, 0.6, 0.8))
+        for v in dr["spot_max"][ns_mask]:
+            if not np.isnan(v):
+                ax_hist.axvline(v, ls=":", color=(0.4, 0.6, 0.9), alpha=0.7, lw=1)
+        for v in dr["spot_min"][ns_mask]:
+            if not np.isnan(v):
+                ax_hist.axvline(v, ls=":", color=(0.9, 0.6, 0.4), alpha=0.7, lw=1)
+    # Hotspot max/min (dashed)
+    if np.any(hs_mask):
+        for v in dr["spot_max"][hs_mask]:
+            if not np.isnan(v):
+                ax_hist.axvline(v, ls="--", color=blue, alpha=0.8, lw=1)
+        for v in dr["spot_min"][hs_mask]:
+            if not np.isnan(v):
+                ax_hist.axvline(v, ls="--", color=red, alpha=0.8, lw=1)
+    # Threshold bold lines
+    if ethres is not None:
+        ax_hist.axvline(ethres, ls="-", color=red,  lw=2.5, label="Exci. threshold")
+    if ithres is not None:
+        ax_hist.axvline(ithres, ls="-", color=blue, lw=2.5, label="Inhi. threshold")
+    ax_hist.set_xlabel("Current (pA)", fontsize=8)
+    ax_hist.set_title(f"Depth {depth_val}: noise vs response", fontsize=9)
+    ax_hist.legend(fontsize=6, loc="best")
+    _despine(ax_hist)
+
+    # ── 5. Stats row 1 [2, 2:4]: max currents + AUCs ──────────────────────
+    gs_s1 = gs[2, 2:4].subgridspec(1, 5, wspace=0.4)
+
+    # 5a. Max response current (min/max of hotspot+nullspot)
+    ax_mc = fig.add_subplot(gs_s1[0, 0:2])
+    g, lb, cl = [], [], []
+    if np.any(hs_mask):
+        g.append(dr["spot_min"][hs_mask].tolist()); lb.append("Min HS"); cl.append((*red,  0.8))
+    if np.any(ns_mask):
+        g.append(dr["spot_min"][ns_mask].tolist()); lb.append("Min NS"); cl.append((0.6, 0.6, 0.6, 0.8))
+    if np.any(hs_mask):
+        g.append(dr["spot_max"][hs_mask].tolist()); lb.append("Max HS"); cl.append((*blue, 0.8))
+    if np.any(ns_mask):
+        g.append(dr["spot_max"][ns_mask].tolist()); lb.append("Max NS"); cl.append((0.6, 0.6, 0.6, 0.8))
+    if g:
+        plotScatterBar(g, labels=lb, colors=cl, style="bar", ax=ax_mc)
+    ax_mc.set_ylabel("Current (pA)", fontsize=7); ax_mc.set_title("Max response current", fontsize=8)
+    _despine(ax_mc)
+
+    # 5b. Max ctrl current
+    ax_cc = fig.add_subplot(gs_s1[0, 2])
+    ctrl_min_v = dr.get("ctrl_min", np.array([]))
+    ctrl_max_v = dr.get("ctrl_max", np.array([]))
+    _cm = [v for v in ctrl_min_v if not np.isnan(v)]
+    _cx = [v for v in ctrl_max_v if not np.isnan(v)]
+    if _cm or _cx:
+        plotScatterBar([_cm or [0], _cx or [0]], labels=["Excitatory", "Inhibitory"],
+                       colors=[(0.8, 0.8, 0.8, 0.8)] * 2, style="bar", ax=ax_cc)
+    ax_cc.set_ylabel("Current (pA)", fontsize=7); ax_cc.set_title("Max ctrl current", fontsize=8)
+    _despine(ax_cc)
+
+    # 5c. Net total charge (AUC)
+    ax_na = fig.add_subplot(gs_s1[0, 3])
+    g, lb, cl = [], [], []
+    if np.any(hs_mask):
+        g.append(dr["spot_auc"][hs_mask].tolist()); lb.append("Hotspot"); cl.append((*red,  0.8))
+    if np.any(ns_mask):
+        g.append(dr["spot_auc"][ns_mask].tolist()); lb.append("Nullspot"); cl.append((0.6, 0.6, 0.6, 0.8))
     if dr["ctrl_auc"] is not None:
-        groups.append(dr["ctrl_auc"].tolist())
-        labels.append("Ctrl")
-        colors.append((0.8, 0.8, 0.8, 0.8))
+        g.append(dr["ctrl_auc"].tolist()); lb.append("Ctrl"); cl.append((0.8, 0.8, 0.8, 0.8))
+    if g:
+        plotScatterBar(g, labels=lb, colors=cl, style="bar", ax=ax_na)
+    ax_na.set_ylabel("Net charge (pC)", fontsize=7); ax_na.set_title("Net total charge", fontsize=8)
+    _despine(ax_na)
 
-    if groups:
-        plotScatterBar(groups, labels=labels, colors=colors, style="box", ax=ax_stats)
-    ax_stats.set_ylabel("Net total charge (pC)", fontsize=8)
-    ax_stats.set_title(f"Depth {depth_val}: AUC", fontsize=9)
+    # 5d. Absolute total charge
+    ax_aa = fig.add_subplot(gs_s1[0, 4])
+    abs_s = dr.get("spot_abs_auc", np.array([]))
+    abs_c = dr.get("ctrl_abs_auc", np.array([]))
+    g, lb, cl = [], [], []
+    if len(abs_s) > 0 and np.any(hs_mask):
+        g.append(abs_s[hs_mask].tolist()); lb.append("Hotspot"); cl.append((*red,  0.8))
+    if len(abs_s) > 0 and np.any(ns_mask):
+        g.append(abs_s[ns_mask].tolist()); lb.append("Nullspot"); cl.append((0.6, 0.6, 0.6, 0.8))
+    if len(abs_c) > 0:
+        g.append([v for v in abs_c if not np.isnan(v)]); lb.append("Ctrl"); cl.append((0.8, 0.8, 0.8, 0.8))
+    if g:
+        plotScatterBar(g, labels=lb, colors=cl, style="bar", ax=ax_aa)
+    ax_aa.set_ylabel("Abs charge (pC)", fontsize=7); ax_aa.set_title("Absolute total charge", fontsize=8)
+    _despine(ax_aa)
 
-    # --- Response rates ---
-    ax_rates = fig.add_subplot(gs_master[3, 2:4])
-    rate_groups = []
-    rate_labels = []
-    rate_colors = []
-    if np.any(hs_mask):
-        rate_groups.append(dr["e_rate"][hs_mask].tolist())
-        rate_labels.append("E hotspot")
-        rate_colors.append((*red, 0.8))
-    if np.any(ns_mask):
-        rate_groups.append(dr["e_rate"][ns_mask].tolist())
-        rate_labels.append("E nullspot")
-        rate_colors.append((0.6, 0.6, 0.6, 0.8))
-    if np.any(hs_mask):
-        rate_groups.append(dr["i_rate"][hs_mask].tolist())
-        rate_labels.append("I hotspot")
-        rate_colors.append((*blue, 0.8))
-    if np.any(ns_mask):
-        rate_groups.append(dr["i_rate"][ns_mask].tolist())
-        rate_labels.append("I nullspot")
-        rate_colors.append((0.6, 0.6, 0.6, 0.8))
+    # ── 6. Stats row 2 [3, 2:4]: timing + response rates ──────────────────
+    gs_s2 = gs[3, 2:4].subgridspec(1, 5, wspace=0.4)
 
-    if rate_groups:
-        plotScatterBar(
-            rate_groups, labels=rate_labels, colors=rate_colors,
-            style="box", ax=ax_rates,
-        )
-    ax_rates.set_ylabel("Response rate", fontsize=8)
-    ax_rates.set_title(f"Depth {depth_val}: response rates", fontsize=9)
+    # 6a. Time to max response current
+    ax_tm = fig.add_subplot(gs_s2[0, 0:2])
+    mnt = dr.get("spot_min_time", np.array([])); mxt = dr.get("spot_max_time", np.array([]))
+    g, lb, cl = [], [], []
+    if len(mnt) > 0 and np.any(hs_mask):
+        g.append([v for v in mnt[hs_mask] if not np.isnan(v)]); lb.append("Min HS"); cl.append((*red,  0.8))
+    if len(mnt) > 0 and np.any(ns_mask):
+        g.append([v for v in mnt[ns_mask] if not np.isnan(v)]); lb.append("Min NS"); cl.append((0.6, 0.6, 0.6, 0.8))
+    if len(mxt) > 0 and np.any(hs_mask):
+        g.append([v for v in mxt[hs_mask] if not np.isnan(v)]); lb.append("Max HS"); cl.append((*blue, 0.8))
+    if len(mxt) > 0 and np.any(ns_mask):
+        g.append([v for v in mxt[ns_mask] if not np.isnan(v)]); lb.append("Max NS"); cl.append((0.6, 0.6, 0.6, 0.8))
+    if g:
+        plotScatterBar(g, labels=lb, colors=cl, style="bar", ax=ax_tm)
+    ax_tm.set_ylabel("Time (ms)", fontsize=7); ax_tm.set_title("Time to max response current", fontsize=8)
+    _despine(ax_tm)
 
+    # 6b. Time to max ctrl current
+    ax_ct = fig.add_subplot(gs_s2[0, 2])
+    cmt = dr.get("ctrl_min_time", np.array([])); cxt = dr.get("ctrl_max_time", np.array([]))
+    _cmt = [v for v in cmt if not np.isnan(v)]; _cxt = [v for v in cxt if not np.isnan(v)]
+    if _cmt or _cxt:
+        plotScatterBar([_cmt or [0], _cxt or [0]], labels=["Excitatory", "Inhibitory"],
+                       colors=[(0.8, 0.8, 0.8, 0.8)] * 2, style="bar", ax=ax_ct)
+    ax_ct.set_ylabel("Time (ms)", fontsize=7); ax_ct.set_title("Time to max ctrl current", fontsize=8)
+    _despine(ax_ct)
+
+    # 6c. Excitatory response rate
+    ax_er = fig.add_subplot(gs_s2[0, 3])
+    er = dr.get("e_rate", np.array([])); erc = dr.get("e_rate_ctrl", np.array([]))
+    g, lb, cl = [], [], []
+    if len(er) > 0 and np.any(hs_mask):
+        g.append(er[hs_mask].tolist()); lb.append("Hotspot opto"); cl.append((*red,  0.8))
+    if len(er) > 0 and np.any(ns_mask):
+        g.append(er[ns_mask].tolist()); lb.append("Nullspot opto"); cl.append((0.6, 0.6, 0.6, 0.8))
+    if len(erc) > 0:
+        g.append(erc.tolist()); lb.append("Ctrl"); cl.append((0.8, 0.8, 0.8, 0.8))
+    if g:
+        plotScatterBar(g, labels=lb, colors=cl, style="bar", ax=ax_er)
+    ax_er.set_ylabel("Excit. response rate", fontsize=7); ax_er.set_title("Excitatory response rate", fontsize=8)
+    _despine(ax_er)
+
+    # 6d. Inhibitory response rate
+    ax_ir = fig.add_subplot(gs_s2[0, 4])
+    ir = dr.get("i_rate", np.array([])); irc = dr.get("i_rate_ctrl", np.array([]))
+    g, lb, cl = [], [], []
+    if len(ir) > 0 and np.any(hs_mask):
+        g.append(ir[hs_mask].tolist()); lb.append("Hotspot opto"); cl.append((*blue, 0.8))
+    if len(ir) > 0 and np.any(ns_mask):
+        g.append(ir[ns_mask].tolist()); lb.append("Nullspot opto"); cl.append((0.6, 0.6, 0.6, 0.8))
+    if len(irc) > 0:
+        g.append(irc.tolist()); lb.append("Ctrl"); cl.append((0.8, 0.8, 0.8, 0.8))
+    if g:
+        plotScatterBar(g, labels=lb, colors=cl, style="bar", ax=ax_ir)
+    ax_ir.set_ylabel("Inhib. response rate", fontsize=7); ax_ir.set_title("Inhibitory response rate", fontsize=8)
+    _despine(ax_ir)
+
+    # ── Title ───────────────────────────────────────────────────────────────
     title = f"Cell {cell_num}"
     if search_name:
         title += f" — {search_name}"
     title += f" — Depth {depth_val}"
     fig.suptitle(title, fontsize=12)
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
-
     return fig
 
 
@@ -1740,7 +1961,13 @@ def _plot_pair_depth(
     sl1, sl2 = sl1[:, :t_len], sl2[:, :t_len]
     opto_time = np.arange(t_len) / spm
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig = plt.figure(figsize=(14, 10), constrained_layout=True)
+    gs_pair = GridSpec(2, 3, figure=fig, width_ratios=[4, 4, 0.4])
+    axes = np.array([
+        [fig.add_subplot(gs_pair[0, 0]), fig.add_subplot(gs_pair[0, 1])],
+        [fig.add_subplot(gs_pair[1, 0]), fig.add_subplot(gs_pair[1, 1])],
+    ])
+    ax_cbar_diff = fig.add_subplot(gs_pair[1, 2])
 
     # Search 1 traces
     ax = axes[0, 0]
@@ -1749,6 +1976,8 @@ def _plot_pair_depth(
     ax.set_title(f"Search {s1_idx+1} — Depth {depth_val}", fontsize=9)
     ax.set_xlabel("ms", fontsize=8)
     ax.set_ylabel("pA", fontsize=8)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
     if ethres is not None:
         ax.axhline(ethres, ls="--", color=red, alpha=0.4)
     if ithres is not None:
@@ -1761,19 +1990,29 @@ def _plot_pair_depth(
     ax.set_title(f"Search {s2_idx+1} — Depth {depth_val}", fontsize=9)
     ax.set_xlabel("ms", fontsize=8)
     ax.set_ylabel("pA", fontsize=8)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
     if ethres is not None:
         ax.axhline(ethres, ls="--", color=red, alpha=0.4)
     if ithres is not None:
         ax.axhline(ithres, ls="--", color=blue, alpha=0.4)
 
-    # Difference map
+    # Difference map — colormap centred at zero, same orientation fix as response map
     ax = axes[1, 0]
     diff_resp = dr.get("diff_response")
     if diff_resp is not None and isinstance(diff_resp, np.ndarray) and diff_resp.ndim == 2:
-        im = ax.imshow(diff_resp, cmap="RdBu_r", aspect="auto")
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Diff charge (pC)")
+        _abs_max = np.nanmax(np.abs(diff_resp))
+        _abs_max = _abs_max if _abs_max > 0 else 1.0
+        im = ax.imshow(diff_resp.T, cmap="RdBu_r", aspect="equal",
+                       vmin=-_abs_max, vmax=_abs_max, origin="upper")
+        fig.colorbar(im, cax=ax_cbar_diff, label="Diff charge (pC)")
+    else:
+        ax_cbar_diff.axis("off")
     ax.set_title(f"Depth {depth_val}: difference map", fontsize=9)
-    ax.axis("off")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
 
     # AUC comparison scatter
     ax = axes[1, 1]
@@ -1791,8 +2030,9 @@ def _plot_pair_depth(
     ax.set_xlabel(f"Search {s1_idx+1} AUC (pC)", fontsize=8)
     ax.set_ylabel(f"Search {s2_idx+1} AUC (pC)", fontsize=8)
     ax.set_title(f"Depth {depth_val}: AUC comparison", fontsize=9)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
 
     title = f"Cell {cell_num} — Pair ({s1_idx+1}, {s2_idx+1}) — Depth {depth_val}"
     fig.suptitle(title, fontsize=12)
-    fig.tight_layout(rect=[0, 0, 1, 0.96])
     return fig

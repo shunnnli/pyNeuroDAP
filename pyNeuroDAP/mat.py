@@ -71,6 +71,52 @@ def load_mat(file_path):
             return mat_data
 
 
+def load_timeseries_mat(file_path, struct_key='timeSeries'):
+    """
+    Load a MATLAB file containing a timeSeries struct array and re-index it
+    by channel name so fields can be accessed as:
+
+        ts = load_timeseries_mat('session.mat')
+        ts['NAc_left']['time_offset']
+        ts['PMT']['data']
+
+    Hyphens in channel names are replaced with underscores.
+
+    Parameters
+    ----------
+    file_path : str
+        Path to the MATLAB (.mat) file.
+    struct_key : str
+        Variable name of the struct array inside the file (default: 'timeSeries').
+
+    Returns
+    -------
+    dict
+        ``{channel_name: {field: value, ...}, ...}``
+    """
+    mat_data = load_mat(file_path)
+    ts = mat_data[struct_key]
+
+    result = {}
+
+    # mat73 (v7.3) returns struct arrays in field-major format: dict of lists
+    if isinstance(ts, dict):
+        names = ts['name']
+        if isinstance(names, str):
+            names = [names]
+        for i, name in enumerate(names):
+            key = str(name).replace('-', '_')
+            result[key] = {field: vals[i] for field, vals in ts.items() if field != 'name'}
+
+    # scipy (v<7.3) returns struct arrays as a numpy array of MatlabObject
+    else:
+        for entry in np.atleast_1d(ts):
+            name = str(entry.name).replace('-', '_')
+            result[name] = {f: getattr(entry, f) for f in entry._fieldnames if f != 'name'}
+
+    return result
+
+
 def convert_params_from_mat(session_mat, exclude_keys=None):
     """
     Get the parameters from a MATLAB file.

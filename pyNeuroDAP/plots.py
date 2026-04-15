@@ -38,7 +38,11 @@ def plot_sem(y, x=None,
     norm = mcolors.Normalize(vmin=0, vmax=len(y))
 
     mean = np.nanmean(y, axis=0)
-    sem  = np.nanstd(y, axis=0, ddof=1) / np.sqrt(np.sum(~np.isnan(y), axis=0))
+    # Use ddof=1 only when we have >=2 observations to avoid warnings / NaNs.
+    denom = np.sqrt(np.sum(~np.isnan(y), axis=0))
+    denom = np.where(denom == 0, np.nan, denom)
+    ddof = 1 if n_events >= 2 else 0
+    sem = np.nanstd(y, axis=0, ddof=ddof) / denom
     ax.plot(x, mean, color=color, label=label)
     
     if fill: ax.fill_between(x, mean - sem, mean + sem, alpha=0.2, color=color, edgecolor='None', label="_nolegend_")
