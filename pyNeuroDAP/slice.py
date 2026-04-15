@@ -1983,7 +1983,19 @@ def _plot_pair_depth(
     def _hs_mask(hs, n):
         if hs is None or n == 0:
             return np.zeros(n, dtype=bool)
-        h = np.asarray(hs).flatten().astype(float)
+        arr = np.asarray(hs)
+        if arr.dtype == object:
+            # Object array: each element may be a per-spot sub-array or scalar
+            result = np.zeros(n, dtype=bool)
+            flat = arr.flatten()
+            for i in range(min(n, len(flat))):
+                el = flat[i]
+                if isinstance(el, np.ndarray) and el.dtype.kind in ("f", "i", "u"):
+                    result[i] = bool(np.any(el >= 1))
+                elif isinstance(el, (int, float, np.integer, np.floating)):
+                    result[i] = bool(el >= 1)
+            return result
+        h = arr.flatten().astype(float)
         h = np.pad(h, (0, max(0, n - len(h))))
         return (h[:n] >= 1)
 
