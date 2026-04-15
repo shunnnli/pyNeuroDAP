@@ -1199,6 +1199,22 @@ def get_traces(
     # ----------------------------
     # Compute centers (indices in signal sample space)
     # ----------------------------
+
+    # When params is available, infer the native (un-downsampled) Fs for the signal system.
+    # If signal_fs differs from the native Fs, integer events are NI/imec sample indices at
+    # the native rate and must be converted to seconds before mapping into the downsampled signal.
+    native_fs: float | None = None
+    if params is not None and "sync" in params:
+        try:
+            native_fs = _infer_fs_from_params(params, signal_system)
+        except ValueError:
+            native_fs = None
+    is_downsampled = (
+        native_fs is not None
+        and signal_fs is not None
+        and abs(float(signal_fs) - native_fs) > 0.5
+    )
+
     if same_system:
         # event can be digital vector, indices, or seconds
         if event.ndim == 1 and event.size == T and np.issubdtype(event.dtype, np.number):
@@ -1211,12 +1227,15 @@ def get_traces(
                         "In pre/post step mode, event must be indices or digital vector (not seconds)."
                     )
                 centers = np.round(event.astype(float) * signal_fs).astype(np.int64)
-        elif np.issubdtype(event.dtype, np.integer):
-            centers = event.astype(np.int64)
-        elif np.issubdtype(event.dtype, np.floating) and np.all(event == np.floor(event)):
-            # Float array whose values are all whole numbers → treat as sample indices
-            # (common when loading from MATLAB via scipy.io / h5py which returns float64)
-            centers = event.astype(np.int64)
+        elif np.issubdtype(event.dtype, np.integer) or (
+            np.issubdtype(event.dtype, np.floating) and np.all(event == np.floor(event))
+        ):
+            if is_downsampled:
+                # Events are native-rate indices; convert to seconds then to downsampled indices.
+                event_sec = event.astype(float) / native_fs
+                centers = np.round(event_sec * float(signal_fs)).astype(np.int64)
+            else:
+                centers = event.astype(np.int64)
         else:
             if steps_mode:
                 raise ValueError(
