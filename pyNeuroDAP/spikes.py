@@ -1085,8 +1085,18 @@ def nearest_index(time_target, time_query):
     t = np.asarray(time_target, float)
     q = np.asarray(time_query, float)
 
-    if np.any(np.diff(t) < 0):
-        raise ValueError("timeTarget must be monotonically increasing for searchsorted")
+    # `searchsorted` only requires a sorted (non-decreasing) target. In practice, sync
+    # timebases can have tiny floating-point jitter and occasional repeated timestamps.
+    # Treat small negative diffs as numerical noise; fail only for true regressions.
+    dt = np.diff(t)
+    if dt.size and np.nanmin(dt) < -1e-9:
+        raise ValueError(
+            "timeTarget must be monotonically non-decreasing for searchsorted "
+            "(found a decrease larger than tolerance)."
+        )
+    # Clamp away tiny regressions so the array is safe for searchsorted.
+    if dt.size and np.nanmin(dt) < 0:
+        t = np.maximum.accumulate(t)
 
     j = np.searchsorted(t, q, side="left")
     j = np.clip(j, 0, t.size - 1)
@@ -1104,7 +1114,7 @@ def get_traces(
     pre_steps=0,
     post_steps=0,
     signal_fs=None,                  # Hz; can be inferred from params when time_range mode
-    same_system=True,
+    same_system=False,
     params=None,
     event_system="ni",
     signal_system="imec",
@@ -1136,6 +1146,12 @@ def get_traces(
     T = x.shape[0]
     event = np.asarray(event)
 
+    # Check same system
+    if event_system.lower() != signal_system.lower():
+        same_system = False
+    else:
+        same_system = True
+
     # # Check event format (to be compatible with event as single number)
     # if not isinstance(event, np.ndarray) and not isinstance(event, list):
     #     event_idx = np.array([event])
@@ -1144,6 +1160,7 @@ def get_traces(
     #         event_idx = np.where(np.diff(event) == 1)[0] + 1
     #     else:
     #         event_idx = np.asarray(event, dtype=int)
+
 
 
     # ----------------------------

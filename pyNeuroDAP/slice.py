@@ -1441,10 +1441,14 @@ def _plot_search_depth(
     lw = max(0.2, min(3, 3.0 * (4 / max(n_full, 1)) ** 0.3))
 
     # ── Figure ─────────────────────────────────────────────────────────────
+    # 4-column master: trace grid = left half (cols 0-1), everything else =
+    # right half (cols 2-3).  Stats rows use a sub-grid with width_ratios
+    # [3,1,1,1] so the first panel is clearly ~3× wider than each of the
+    # three narrow ones, matching the MATLAB nexttile(...,[1 2]) visual.
     fig = plt.figure(figsize=(24, 16), constrained_layout=True)
     gs = GridSpec(4, 4, figure=fig)
 
-    # ── 1. Tiled trace grid [:4, :2] ───────────────────────────────────────
+    # ── 1. Tiled trace grid [:4, :2] ─────────────────────────────────────
     gs_traces = gs[:4, :2].subgridspec(n_row, n_col, hspace=0.05, wspace=0.05)
     for t in range(n_full):
         ax = fig.add_subplot(gs_traces[t // n_col, t % n_col])
@@ -1565,9 +1569,10 @@ def _plot_search_depth(
     ax_hist.legend(fontsize=6, loc="best")
     _despine(ax_hist)
 
-    # ── 5. Stats row 1 [2, 2:4]: max currents + AUCs ──────────────────────
-    # width_ratios=[2,1,1,1] mirrors MATLAB nexttile(...,[1 2]) for the first panel
-    gs_s1 = gs[2, 2:4].subgridspec(1, 4, width_ratios=[2, 1, 1, 1], wspace=0.4)
+    # ── 5. Stats row 1 [2, 2:4]: max currents + AUCs ─────────────────────
+    # width_ratios=[3,1,1,1] → first panel is ~50 % of the row width vs
+    # ~17 % each for the others, giving a clear visual match to MATLAB.
+    gs_s1 = gs[2, 2:4].subgridspec(1, 4, width_ratios=[3, 1, 1, 1], wspace=0.08)
 
     # 5a. Max response current (min/max of hotspot+nullspot)
     ax_mc = fig.add_subplot(gs_s1[0, 0])
@@ -1597,7 +1602,7 @@ def _plot_search_depth(
     ax_cc.set_ylabel("Current (pA)", fontsize=7); ax_cc.set_title("Max ctrl current", fontsize=8)
     _despine(ax_cc)
 
-    # 5c. Net total charge (AUC)
+    # 5c. Net total charge
     ax_na = fig.add_subplot(gs_s1[0, 2])
     g, lb, cl = [], [], []
     if np.any(hs_mask):
@@ -1627,8 +1632,8 @@ def _plot_search_depth(
     ax_aa.set_ylabel("Abs charge (pC)", fontsize=7); ax_aa.set_title("Absolute total charge", fontsize=8)
     _despine(ax_aa)
 
-    # ── 6. Stats row 2 [3, 2:4]: timing + response rates ──────────────────
-    gs_s2 = gs[3, 2:4].subgridspec(1, 4, width_ratios=[2, 1, 1, 1], wspace=0.4)
+    # ── 6. Stats row 2 [3, 2:4]: timing + response rates ─────────────────
+    gs_s2 = gs[3, 2:4].subgridspec(1, 4, width_ratios=[3, 1, 1, 1], wspace=0.08)
 
     # 6a. Time to max response current
     ax_tm = fig.add_subplot(gs_s2[0, 0])
