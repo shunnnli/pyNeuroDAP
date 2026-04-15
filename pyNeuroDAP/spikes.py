@@ -1213,6 +1213,10 @@ def get_traces(
                 centers = np.round(event.astype(float) * signal_fs).astype(np.int64)
         elif np.issubdtype(event.dtype, np.integer):
             centers = event.astype(np.int64)
+        elif np.issubdtype(event.dtype, np.floating) and np.all(event == np.floor(event)):
+            # Float array whose values are all whole numbers → treat as sample indices
+            # (common when loading from MATLAB via scipy.io / h5py which returns float64)
+            centers = event.astype(np.int64)
         else:
             if steps_mode:
                 raise ValueError(
@@ -1227,17 +1231,38 @@ def get_traces(
         time_ref = _pick_time(params, event_system)
         time_tgt = _pick_time(params, signal_system)
 
-        # get event times on sync axis (seconds)
-        if event.ndim == 1 and event.size == time_ref.size:
+        # --- Step 1: convert event to seconds in the common reference frame ---
+        # time_ref may be at a different (often higher) sample rate than the signal,
+        # so we only use it to map event indices → seconds; we never use the resulting
+        # time_tgt index directly as a signal sample index.
+        if event.ndim == 1 and event.size == time_ref.size and np.issubdtype(event.dtype, np.number):
             ev = event.astype(np.int8)
-            event_idx = np.where(np.diff(ev) == 1)[0] + 1
-            ev_sync = time_ref[event_idx]
+            if np.all((ev == 0) | (ev == 1)):
+                # genuine digital vector: find rising edges
+                event_idx = np.where(np.diff(ev) == 1)[0] + 1
+                ev_sync = time_ref[event_idx]
+            else:
+                # same-length but NOT binary → treat as sample indices, not a digital vector
+                ev_sync = time_ref[event.astype(np.int64)]
         elif np.issubdtype(event.dtype, np.integer):
             ev_sync = time_ref[event.astype(np.int64)]
+        elif np.issubdtype(event.dtype, np.floating) and np.all(event == np.floor(event)):
+            # float64 whole numbers from MATLAB → treat as sample indices
+            ev_sync = time_ref[event.astype(np.int64)]
         else:
+            # already in seconds
             ev_sync = event.astype(float)
 
-        centers = nearest_index(time_tgt, ev_sync)
+        # --- Step 2: convert seconds → signal sample index via signal_fs ---
+        # Mirrors the MATLAB getTraces.m approach:
+        #   eventInSec = findCorrespondingTime(...) / syncFs
+        #   firstBin   = round((eventInSec + timeRange(1)) * signalFs)
+        # time_tgt[0] is the recording-start time of the signal in the common reference,
+        # so (ev_sync - time_tgt[0]) * signal_fs gives the correct 0-based sample index
+        # regardless of whether time_tgt has the same length as data (it often does not,
+        # e.g. timePhotometry stored at NI resolution while NAc signal is at 50 Hz).
+        sig_t0 = float(time_tgt[0]) if time_tgt.size > 0 else 0.0
+        centers = np.round((ev_sync - sig_t0) * signal_fs).astype(np.int64)
 
     centers = np.asarray(centers, dtype=np.int64)
 

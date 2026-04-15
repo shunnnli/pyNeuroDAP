@@ -1917,6 +1917,15 @@ def analyze_dmd_search_pair(
             "n_spots2": n_spots2,
             "hs1": hs1,
             "hs2": hs2,
+            # per-spot trace lists (needed by _plot_pair_depth trace grid)
+            "dcm1": dcm1,
+            "dcm2": dcm2,
+            "dbm1": dbm1,
+            "dbm2": dbm2,
+            "ss1": ss1,
+            "ss2": ss2,
+            "seq1": seq1,
+            "seq2": seq2,
             "diff_response": diff_response[:, :, cd_i] if (
                 isinstance(diff_response, np.ndarray) and diff_response.ndim == 3
                 and cd_i < diff_response.shape[2]
@@ -1949,96 +1958,282 @@ def _plot_pair_depth(
     dr, alignment, time_range_ms,
     blue=(0.2, 0.4, 0.8), red=(0.8, 0.2, 0.2), purple=(0.91, 0.51, 0.98),
     cell_num=None, s1_idx=0, s2_idx=1,
+    stim_duration_ms: float = 10.0,
 ):
-    """Generate a comparison figure for one depth of a search pair."""
-    depth_val = dr["depth"]
-    opto1 = dr["opto1"]
-    opto2 = dr["opto2"]
-    aw = alignment["analysis_window"]
-    aw1 = aw[aw < opto1.shape[1]]
-    aw2 = aw[aw < opto2.shape[1]]
-    spm = alignment["samples_per_ms"]
-    ethres = dr["ethres"]
-    ithres = dr["ithres"]
+    """
+    Comparison figure for one depth of a search pair.
 
-    sl1 = opto1[:, aw1]
-    sl2 = opto2[:, aw2]
-    t_len = min(sl1.shape[1], sl2.shape[1])
-    sl1, sl2 = sl1[:, :t_len], sl2[:, :t_len]
-    opto_time = np.arange(t_len) / spm
+    Layout mirrors _plot_search_depth:
+      cols 0-1  : per-spot trace grid (Search 1)
+      col 2     : difference map  [rows 0-1]
+      col 3     : Search 1 hotspot trace  [row 0]  /  Search 2 hotspot trace  [row 1]
+      cols 2-3  : stats rows 1 & 2  [rows 2-3]
+    """
+    depth_val  = dr["depth"]
+    opto1, opto2 = dr["opto1"], dr["opto2"]
+    ctrl1, ctrl2 = dr["ctrl1"], dr["ctrl2"]
+    aw         = alignment["analysis_window"]
+    spm        = alignment["samples_per_ms"]
+    output_fs  = alignment["output_fs"]
+    ethres     = dr["ethres"]
+    ithres     = dr["ithres"]
 
-    fig = plt.figure(figsize=(14, 10), constrained_layout=True)
-    gs_pair = GridSpec(2, 3, figure=fig, width_ratios=[4, 4, 0.4])
-    axes = np.array([
-        [fig.add_subplot(gs_pair[0, 0]), fig.add_subplot(gs_pair[0, 1])],
-        [fig.add_subplot(gs_pair[1, 0]), fig.add_subplot(gs_pair[1, 1])],
-    ])
-    ax_cbar_diff = fig.add_subplot(gs_pair[1, 2])
+    n_spots1 = dr["n_spots1"]
+    n_spots2 = dr["n_spots2"]
+    seq1 = dr.get("seq1", np.zeros(max(opto1.shape[0], 1), dtype=int))
+    seq2 = dr.get("seq2", np.zeros(max(opto2.shape[0], 1), dtype=int))
 
-    # Search 1 traces
-    ax = axes[0, 0]
-    if sl1.shape[0] > 0:
-        plot_sem(sl1, x=opto_time, color=red, ax=ax, plot_individual=True)
-    ax.set_title(f"Search {s1_idx+1} — Depth {depth_val}", fontsize=9)
-    ax.set_xlabel("ms", fontsize=8)
-    ax.set_ylabel("pA", fontsize=8)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    if ethres is not None:
-        ax.axhline(ethres, ls="--", color=red, alpha=0.4)
-    if ithres is not None:
-        ax.axhline(ithres, ls="--", color=blue, alpha=0.4)
+    # ── hotspot masks ────────────────────────────────────────────────────
+    def _hs_mask(hs, n):
+        if hs is None or n == 0:
+            return np.zeros(n, dtype=bool)
+        h = np.asarray(hs).flatten().astype(float)
+        h = np.pad(h, (0, max(0, n - len(h))))
+        return (h[:n] >= 1)
 
-    # Search 2 traces
-    ax = axes[0, 1]
-    if sl2.shape[0] > 0:
-        plot_sem(sl2, x=opto_time, color=blue, ax=ax, plot_individual=True)
-    ax.set_title(f"Search {s2_idx+1} — Depth {depth_val}", fontsize=9)
-    ax.set_xlabel("ms", fontsize=8)
-    ax.set_ylabel("pA", fontsize=8)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    if ethres is not None:
-        ax.axhline(ethres, ls="--", color=red, alpha=0.4)
-    if ithres is not None:
-        ax.axhline(ithres, ls="--", color=blue, alpha=0.4)
+    hs_mask1 = _hs_mask(dr.get("hs1"), n_spots1)
+    hs_mask2 = _hs_mask(dr.get("hs2"), n_spots2)
 
-    # Difference map — colormap centred at zero, same orientation fix as response map
-    ax = axes[1, 0]
+    # ── time axes ────────────────────────────────────────────────────────
+    n_samples  = opto1.shape[1]
+    t_full     = np.arange(n_samples) / spm + time_range_ms[0]
+    aw_sliced  = aw[aw < n_samples]
+
+    # ── per-spot stats ───────────────────────────────────────────────────
+    def _spot_stats(opto, seq, n_spots):
+        mins, maxs, aucs = [], [], []
+        for s in range(n_spots):
+            mask = seq == s
+            if np.any(mask) and len(aw_sliced) > 0:
+                sl        = np.nanmean(opto[mask][:, aw_sliced], axis=0)
+                mins.append(float(np.nanmin(sl)))
+                maxs.append(float(np.nanmax(sl)))
+                aucs.append(float(sl.sum() / output_fs))
+            else:
+                mins.append(np.nan); maxs.append(np.nan); aucs.append(np.nan)
+        return np.array(mins), np.array(maxs), np.array(aucs)
+
+    spot_min1, spot_max1, spot_auc1 = _spot_stats(opto1, seq1, n_spots1)
+    spot_min2, spot_max2, spot_auc2 = _spot_stats(opto2, seq2, n_spots2)
+
+    # ── figure / GridSpec ────────────────────────────────────────────────
+    n_full = max(n_spots1, 1)
+    n_row  = max(1, int(np.ceil(np.sqrt(n_full))))
+    n_col  = max(1, int(np.ceil(n_full / n_row)))
+
+    fig = plt.figure(figsize=(24, 16), constrained_layout=True)
+    gs  = GridSpec(4, 4, figure=fig)
+    gs_traces = gs[:4, :2].subgridspec(n_row, n_col, hspace=0.05, wspace=0.05)
+
+    # ── 1. Trace grid — Search 1 per-spot traces ─────────────────────────
+    for t in range(n_spots1):
+        ax  = fig.add_subplot(gs_traces[t // n_col, t % n_col])
+        mask = seq1 == t
+        if np.any(mask):
+            clr = red if hs_mask1[t] else (0.5, 0.5, 0.5)
+            plot_sem(opto1[mask], x=t_full, color=clr, ax=ax,
+                     plot_individual=True, alpha=0.6)
+        ax.axvspan(0, stim_duration_ms, facecolor="salmon", alpha=0.15, edgecolor="none")
+        if ethres is not None:
+            ax.axhline(ethres, ls="--", color=(*red, 0.5), lw=0.8)
+        if ithres is not None:
+            ax.axhline(ithres, ls="--", color=(*blue, 0.5), lw=0.8)
+        is_last = (t == n_spots1 - 1)
+        if is_last:
+            _despine(ax)
+        else:
+            for sp in ax.spines.values():
+                sp.set_visible(False)
+            ax.set_xticks([]); ax.set_yticks([])
+
+    # ── 2. Difference map [0:2, 2] ───────────────────────────────────────
+    ax_dmap = fig.add_subplot(gs[0:2, 2])
     diff_resp = dr.get("diff_response")
-    if diff_resp is not None and isinstance(diff_resp, np.ndarray) and diff_resp.ndim == 2:
-        _abs_max = np.nanmax(np.abs(diff_resp))
-        _abs_max = _abs_max if _abs_max > 0 else 1.0
-        im = ax.imshow(diff_resp.T, cmap="RdBu_r", aspect="equal",
-                       vmin=-_abs_max, vmax=_abs_max, origin="upper")
-        fig.colorbar(im, cax=ax_cbar_diff, label="Diff charge (pC)")
-    else:
-        ax_cbar_diff.axis("off")
-    ax.set_title(f"Depth {depth_val}: difference map", fontsize=9)
-    ax.set_xticks([])
-    ax.set_yticks([])
-    for spine in ax.spines.values():
-        spine.set_visible(False)
+    if (diff_resp is not None and isinstance(diff_resp, np.ndarray)
+            and diff_resp.ndim == 2 and diff_resp.size > 0):
+        _vm = np.nanmax(np.abs(diff_resp))
+        _vm = _vm if _vm > 0 else 1.0
+        im  = ax_dmap.imshow(diff_resp.T, cmap="RdBu_r", aspect="auto",
+                              vmin=-_vm, vmax=_vm, origin="upper")
+        fig.colorbar(im, ax=ax_dmap, fraction=0.05, pad=0.02, label="Δ charge (pC)")
+    ax_dmap.set_title(f"Depth {depth_val}: difference map", fontsize=9)
+    ax_dmap.set_xticks([]); ax_dmap.set_yticks([])
+    for sp in ax_dmap.spines.values():
+        sp.set_visible(False)
 
-    # AUC comparison scatter
-    ax = axes[1, 1]
-    n_common = min(len(dr["auc1"]), len(dr["auc2"]))
+    # ── 3. Search 1 hotspot trace [0, 3] ─────────────────────────────────
+    ax_t1 = fig.add_subplot(gs[0, 3])
+    hs_idx1 = np.where(hs_mask1)[0]
+    if len(hs_idx1) > 0:
+        m = seq1 == hs_idx1[0]
+        if np.any(m):
+            plot_sem(opto1[m], x=t_full, color=red, ax=ax_t1, label="opto")
+            if ctrl1.shape[0] > 0:
+                mc = seq1 == hs_idx1[0]
+                if ctrl1.shape[0] >= opto1[m].shape[0]:
+                    plot_sem(ctrl1[mc], x=t_full, color=(0.5, 0.5, 0.5),
+                             ax=ax_t1, label="baseline")
+    if ethres is not None:
+        ax_t1.axhline(ethres, ls="--", color=red,  alpha=0.5, lw=0.8)
+    if ithres is not None:
+        ax_t1.axhline(ithres, ls="--", color=blue, alpha=0.5, lw=0.8)
+    ax_t1.set_title(f"Search {s1_idx+1}: opto vs baseline trace", fontsize=8)
+    ax_t1.set_xlabel("Time from stim (ms)", fontsize=7)
+    ax_t1.set_ylabel("pA", fontsize=7)
+    ax_t1.legend(fontsize=6)
+    _despine(ax_t1)
+
+    # ── 4. Search 2 hotspot trace [1, 3] ─────────────────────────────────
+    ax_t2 = fig.add_subplot(gs[1, 3])
+    hs_idx2 = np.where(hs_mask2)[0]
+    if len(hs_idx2) > 0:
+        m = seq2 == hs_idx2[0]
+        if np.any(m):
+            plot_sem(opto2[m], x=t_full, color=blue, ax=ax_t2, label="opto")
+            if ctrl2.shape[0] > 0:
+                mc = seq2 == hs_idx2[0]
+                if ctrl2.shape[0] >= opto2[m].shape[0]:
+                    plot_sem(ctrl2[mc], x=t_full, color=(0.5, 0.5, 0.5),
+                             ax=ax_t2, label="baseline")
+    if ethres is not None:
+        ax_t2.axhline(ethres, ls="--", color=red,  alpha=0.5, lw=0.8)
+    if ithres is not None:
+        ax_t2.axhline(ithres, ls="--", color=blue, alpha=0.5, lw=0.8)
+    ax_t2.set_title(f"Search {s2_idx+1}: opto vs baseline trace", fontsize=8)
+    ax_t2.set_xlabel("Time from stim (ms)", fontsize=7)
+    ax_t2.set_ylabel("pA", fontsize=7)
+    ax_t2.legend(fontsize=6)
+    _despine(ax_t2)
+
+    # ── Stats helpers ─────────────────────────────────────────────────────
+    c_s1_hs = (*red,  0.8)
+    c_s1_ns = (0.6, 0.6, 0.6, 0.8)
+    c_s2_hs = (*blue, 0.8)
+    c_s2_ns = (0.7, 0.7, 0.85, 0.8)
+    gs_s1 = gs[2, 2:4].subgridspec(1, 4, width_ratios=[3, 1, 1, 1], wspace=0.08)
+    gs_s2 = gs[3, 2:4].subgridspec(1, 4, width_ratios=[3, 1, 1, 1], wspace=0.08)
+
+    # ── 5a. Max response current (wide) ──────────────────────────────────
+    ax_mc = fig.add_subplot(gs_s1[0, 0])
+    g, lb, cl = [], [], []
+    ns_mask1 = ~hs_mask1
+    ns_mask2 = ~hs_mask2
+    if np.any(hs_mask1): g.append(spot_min1[hs_mask1].tolist()); lb.append(f"Min HS\nS{s1_idx+1}"); cl.append(c_s1_hs)
+    if np.any(ns_mask1): g.append(spot_min1[ns_mask1].tolist()); lb.append(f"Min NS\nS{s1_idx+1}"); cl.append(c_s1_ns)
+    if np.any(hs_mask2): g.append(spot_min2[hs_mask2].tolist()); lb.append(f"Min HS\nS{s2_idx+1}"); cl.append(c_s2_hs)
+    if np.any(ns_mask2): g.append(spot_min2[ns_mask2].tolist()); lb.append(f"Min NS\nS{s2_idx+1}"); cl.append(c_s2_ns)
+    if g: plotScatterBar(g, labels=lb, colors=cl, style="bar", ax=ax_mc)
+    ax_mc.set_ylabel("Current (pA)", fontsize=7)
+    ax_mc.set_title("Max response current", fontsize=8)
+    _despine(ax_mc)
+
+    # ── 5b. Net total charge ──────────────────────────────────────────────
+    ax_na = fig.add_subplot(gs_s1[0, 1])
+    g, lb, cl = [], [], []
+    if np.any(hs_mask1): g.append(spot_auc1[hs_mask1].tolist()); lb.append(f"HS\nS{s1_idx+1}"); cl.append(c_s1_hs)
+    if np.any(ns_mask1): g.append(spot_auc1[ns_mask1].tolist()); lb.append(f"NS\nS{s1_idx+1}"); cl.append(c_s1_ns)
+    if np.any(hs_mask2): g.append(spot_auc2[hs_mask2].tolist()); lb.append(f"HS\nS{s2_idx+1}"); cl.append(c_s2_hs)
+    if np.any(ns_mask2): g.append(spot_auc2[ns_mask2].tolist()); lb.append(f"NS\nS{s2_idx+1}"); cl.append(c_s2_ns)
+    if g: plotScatterBar(g, labels=lb, colors=cl, style="bar", ax=ax_na)
+    ax_na.set_ylabel("Net charge (pC)", fontsize=7)
+    ax_na.set_title("Net total charge", fontsize=8)
+    _despine(ax_na)
+
+    # ── 5c. Absolute total charge ─────────────────────────────────────────
+    ax_aa = fig.add_subplot(gs_s1[0, 2])
+    abs1, abs2 = np.abs(spot_auc1), np.abs(spot_auc2)
+    g, lb, cl = [], [], []
+    if np.any(hs_mask1): g.append(abs1[hs_mask1].tolist()); lb.append(f"HS\nS{s1_idx+1}"); cl.append(c_s1_hs)
+    if np.any(ns_mask1): g.append(abs1[ns_mask1].tolist()); lb.append(f"NS\nS{s1_idx+1}"); cl.append(c_s1_ns)
+    if np.any(hs_mask2): g.append(abs2[hs_mask2].tolist()); lb.append(f"HS\nS{s2_idx+1}"); cl.append(c_s2_hs)
+    if np.any(ns_mask2): g.append(abs2[ns_mask2].tolist()); lb.append(f"NS\nS{s2_idx+1}"); cl.append(c_s2_ns)
+    if g: plotScatterBar(g, labels=lb, colors=cl, style="bar", ax=ax_aa)
+    ax_aa.set_ylabel("Abs charge (pC)", fontsize=7)
+    ax_aa.set_title("Absolute total charge", fontsize=8)
+    _despine(ax_aa)
+
+    # ── 5d. AUC comparison scatter ────────────────────────────────────────
+    ax_sc = fig.add_subplot(gs_s1[0, 3])
+    n_common = min(n_spots1, n_spots2)
     if n_common > 0:
-        a1 = dr["auc1"][:n_common]
-        a2 = dr["auc2"][:n_common]
-        ax.scatter(a1, a2, c="k", alpha=0.6, s=20)
-        lims = [min(a1.min(), a2.min()), max(a1.max(), a2.max())]
-        pad = 0.1 * (lims[1] - lims[0]) if lims[1] != lims[0] else 0.1
-        ax.plot([lims[0] - pad, lims[1] + pad], [lims[0] - pad, lims[1] + pad],
-                "k--", alpha=0.3)
-        ax.set_xlim(lims[0] - pad, lims[1] + pad)
-        ax.set_ylim(lims[0] - pad, lims[1] + pad)
-    ax.set_xlabel(f"Search {s1_idx+1} AUC (pC)", fontsize=8)
-    ax.set_ylabel(f"Search {s2_idx+1} AUC (pC)", fontsize=8)
-    ax.set_title(f"Depth {depth_val}: AUC comparison", fontsize=9)
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
+        a1 = spot_auc1[:n_common]
+        a2 = spot_auc2[:n_common]
+        sc_colors = [c_s1_hs if hs_mask1[i] else c_s1_ns for i in range(n_common)]
+        ax_sc.scatter(a1, a2, c=sc_colors, s=20, zorder=3)
+        finite = np.isfinite(a1) & np.isfinite(a2)
+        if np.any(finite):
+            lims = [min(a1[finite].min(), a2[finite].min()),
+                    max(a1[finite].max(), a2[finite].max())]
+            pad = 0.1 * (lims[1] - lims[0]) if lims[1] != lims[0] else 0.1
+            ax_sc.plot([lims[0]-pad, lims[1]+pad], [lims[0]-pad, lims[1]+pad],
+                       "k--", alpha=0.3, lw=1)
+    ax_sc.set_xlabel(f"S{s1_idx+1} AUC (pC)", fontsize=7)
+    ax_sc.set_ylabel(f"S{s2_idx+1} AUC (pC)", fontsize=7)
+    ax_sc.set_title("AUC comparison", fontsize=8)
+    _despine(ax_sc)
 
-    title = f"Cell {cell_num} — Pair ({s1_idx+1}, {s2_idx+1}) — Depth {depth_val}"
-    fig.suptitle(title, fontsize=12)
+    # ── 6a. Time to min response current (wide) ───────────────────────────
+    ax_tm = fig.add_subplot(gs_s2[0, 0])
+    def _peak_time_ms(opto, seq, n_spots):
+        ts = []
+        for s in range(n_spots):
+            mask = seq == s
+            if np.any(mask) and len(aw_sliced) > 0:
+                mean_tr = np.nanmean(opto[mask][:, aw_sliced], axis=0)
+                ts.append(float(np.nanargmin(mean_tr) / spm))
+            else:
+                ts.append(np.nan)
+        return np.array(ts)
+
+    t_min1 = _peak_time_ms(opto1, seq1, n_spots1)
+    t_min2 = _peak_time_ms(opto2, seq2, n_spots2)
+    g, lb, cl = [], [], []
+    if np.any(hs_mask1): g.append([v for v in t_min1[hs_mask1] if np.isfinite(v)]); lb.append(f"Min HS\nS{s1_idx+1}"); cl.append(c_s1_hs)
+    if np.any(ns_mask1): g.append([v for v in t_min1[ns_mask1] if np.isfinite(v)]); lb.append(f"Min NS\nS{s1_idx+1}"); cl.append(c_s1_ns)
+    if np.any(hs_mask2): g.append([v for v in t_min2[hs_mask2] if np.isfinite(v)]); lb.append(f"Min HS\nS{s2_idx+1}"); cl.append(c_s2_hs)
+    if np.any(ns_mask2): g.append([v for v in t_min2[ns_mask2] if np.isfinite(v)]); lb.append(f"Min NS\nS{s2_idx+1}"); cl.append(c_s2_ns)
+    g = [grp for grp in g if grp]
+    if g: plotScatterBar(g, labels=lb[:len(g)], colors=cl[:len(g)], style="bar", ax=ax_tm)
+    ax_tm.set_ylabel("Time (ms)", fontsize=7)
+    ax_tm.set_title("Time to max response current", fontsize=8)
+    _despine(ax_tm)
+
+    # ── 6b. AUC histogram — Search 1 ─────────────────────────────────────
+    ax_h1 = fig.add_subplot(gs_s2[0, 1])
+    v1 = spot_auc1[np.isfinite(spot_auc1)]
+    if len(v1) > 0:
+        ax_h1.hist(v1, bins=min(10, len(v1)), color=(*red, 0.6), edgecolor="none", orientation="vertical")
+    ax_h1.set_xlabel("AUC (pC)", fontsize=7)
+    ax_h1.set_title(f"S{s1_idx+1} AUC dist.", fontsize=7)
+    _despine(ax_h1)
+
+    # ── 6c. AUC histogram — Search 2 ─────────────────────────────────────
+    ax_h2 = fig.add_subplot(gs_s2[0, 2])
+    v2 = spot_auc2[np.isfinite(spot_auc2)]
+    if len(v2) > 0:
+        ax_h2.hist(v2, bins=min(10, len(v2)), color=(*blue, 0.6), edgecolor="none", orientation="vertical")
+    ax_h2.set_xlabel("AUC (pC)", fontsize=7)
+    ax_h2.set_title(f"S{s2_idx+1} AUC dist.", fontsize=7)
+    _despine(ax_h2)
+
+    # ── 6d. Diff AUC bar ─────────────────────────────────────────────────
+    ax_dv = fig.add_subplot(gs_s2[0, 3])
+    if n_common > 0:
+        diff_auc = spot_auc1[:n_common] - spot_auc2[:n_common]
+        hs_c = hs_mask1[:n_common] | hs_mask2[:n_common]
+        g, lb, cl = [], [], []
+        if np.any(hs_c): g.append([v for v in diff_auc[hs_c] if np.isfinite(v)]); lb.append("Hotspot"); cl.append(c_s1_hs)
+        if np.any(~hs_c): g.append([v for v in diff_auc[~hs_c] if np.isfinite(v)]); lb.append("Nullspot"); cl.append(c_s1_ns)
+        g = [grp for grp in g if grp]
+        if g: plotScatterBar(g, labels=lb[:len(g)], colors=cl[:len(g)], style="bar", ax=ax_dv)
+        ax_dv.axhline(0, ls="--", color="k", alpha=0.3, lw=0.8)
+    ax_dv.set_ylabel("Δ charge (pC)", fontsize=7)
+    ax_dv.set_title("Diff charge", fontsize=8)
+    _despine(ax_dv)
+
+    # ── Title ─────────────────────────────────────────────────────────────
+    fig.suptitle(
+        f"Cell {cell_num} — Pair ({s1_idx+1}, {s2_idx+1}) — Depth {depth_val}",
+        fontsize=12,
+    )
     return fig
