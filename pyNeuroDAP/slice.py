@@ -690,13 +690,11 @@ def get_spot_response(
             traces = depth_cmap_list[spot_i]
             key = f"search_{si}"
             result["traces"][key] = {
-                "opto": np.atleast_2d(traces) if isinstance(traces, np.ndarray) else traces,
+                "opto": _to_sweeps_x_timepoints(traces),
             }
             if depth_bmap_list and spot_i < len(depth_bmap_list):
                 bl = depth_bmap_list[spot_i]
-                result["traces"][key]["baseline"] = (
-                    np.atleast_2d(bl) if isinstance(bl, np.ndarray) else bl
-                )
+                result["traces"][key]["baseline"] = _to_sweeps_x_timepoints(bl)
 
             if depth_hs_list and spot_i < len(depth_hs_list):
                 result["traces"][key]["hotspot"] = depth_hs_list[spot_i]
@@ -718,6 +716,21 @@ def get_spot_response(
     result["meta"]["event_sample"] = event_sample
 
     return _filter_result(result, type)
+
+
+def _to_sweeps_x_timepoints(arr) -> np.ndarray:
+    """Return array as (nSweeps, nTimepoints).
+
+    Raw data from MATLAB arrives as (nTimepoints, nSweeps).  We detect
+    this by checking whether the first axis is longer than the second and
+    transpose accordingly.  1-D inputs are promoted to (1, nTimepoints).
+    """
+    if not isinstance(arr, np.ndarray):
+        return arr
+    arr = np.atleast_2d(arr)
+    if arr.shape[0] > arr.shape[1]:
+        arr = arr.T
+    return arr
 
 
 def _resolve_spot_index(
@@ -1089,17 +1102,11 @@ def analyze_dmd_search(
         ctrl_traces = []
         for spot in depth_cmap_list:
             if isinstance(spot, np.ndarray) and spot.dtype.kind == "f":
-                arr = np.atleast_2d(spot) if spot.ndim == 1 else spot
-                if arr.ndim == 2 and arr.shape[0] > arr.shape[1]:
-                    arr = arr.T
-                opto_traces.append(arr)
+                opto_traces.append(_to_sweeps_x_timepoints(spot))
 
         for spot in depth_bmap_list:
             if isinstance(spot, np.ndarray) and spot.dtype.kind == "f":
-                arr = np.atleast_2d(spot) if spot.ndim == 1 else spot
-                if arr.ndim == 2 and arr.shape[0] > arr.shape[1]:
-                    arr = arr.T
-                ctrl_traces.append(arr)
+                ctrl_traces.append(_to_sweeps_x_timepoints(spot))
 
         if not opto_traces:
             continue
@@ -1123,10 +1130,7 @@ def analyze_dmd_search(
         spot_sizes = []
         for spot in depth_cmap_list:
             if isinstance(spot, np.ndarray) and spot.dtype.kind == "f":
-                arr = np.atleast_2d(spot) if spot.ndim == 1 else spot
-                if arr.ndim == 2 and arr.shape[0] > arr.shape[1]:
-                    arr = arr.T
-                spot_sizes.append(arr.shape[0])
+                spot_sizes.append(_to_sweeps_x_timepoints(spot).shape[0])
             else:
                 spot_sizes.append(0)
         spot_sequence = np.repeat(np.arange(len(spot_sizes)), spot_sizes)
@@ -1459,9 +1463,7 @@ def _plot_search_depth(
             is_hs = bool(np.any(np.asarray(spot_hs) >= 1))
 
         if spot_data is not None and isinstance(spot_data, np.ndarray):
-            arr = np.atleast_2d(spot_data) if spot_data.ndim == 1 else spot_data
-            if arr.ndim == 2 and arr.shape[0] > arr.shape[1]:
-                arr = arr.T
+            arr = _to_sweeps_x_timepoints(spot_data)
             trace = arr[:, pf:pl] if pl <= arr.shape[1] else arr
             if trace.shape[0] > 0:
                 spot_color = color if is_hs else (0.5, 0.5, 0.5)
@@ -1827,13 +1829,11 @@ def analyze_dmd_search_pair(
             continue
 
         def _stack(spot_list):
-            arrs = []
-            for sp in spot_list:
-                if isinstance(sp, np.ndarray) and sp.dtype.kind == "f":
-                    a = np.atleast_2d(sp) if sp.ndim == 1 else sp
-                    if a.ndim == 2 and a.shape[0] > a.shape[1]:
-                        a = a.T
-                    arrs.append(a)
+            arrs = [
+                _to_sweeps_x_timepoints(sp)
+                for sp in spot_list
+                if isinstance(sp, np.ndarray) and sp.dtype.kind == "f"
+            ]
             return np.vstack(arrs) if arrs else np.empty((0, 0))
 
         opto1 = _stack(dcm1)
@@ -1860,16 +1860,12 @@ def analyze_dmd_search_pair(
         opto2_sl = opto2[:, aw]
 
         def _spot_sizes(spot_list):
-            ss = []
-            for sp in spot_list:
-                if isinstance(sp, np.ndarray) and sp.dtype.kind == "f":
-                    a = np.atleast_2d(sp) if sp.ndim == 1 else sp
-                    if a.ndim == 2 and a.shape[0] > a.shape[1]:
-                        a = a.T
-                    ss.append(a.shape[0])
-                else:
-                    ss.append(0)
-            return ss
+            return [
+                _to_sweeps_x_timepoints(sp).shape[0]
+                if isinstance(sp, np.ndarray) and sp.dtype.kind == "f"
+                else 0
+                for sp in spot_list
+            ]
 
         ss1 = _spot_sizes(dcm1)
         ss2 = _spot_sizes(dcm2)
