@@ -1566,10 +1566,11 @@ def _plot_search_depth(
     _despine(ax_hist)
 
     # ── 5. Stats row 1 [2, 2:4]: max currents + AUCs ──────────────────────
-    gs_s1 = gs[2, 2:4].subgridspec(1, 5, wspace=0.4)
+    # width_ratios=[2,1,1,1] mirrors MATLAB nexttile(...,[1 2]) for the first panel
+    gs_s1 = gs[2, 2:4].subgridspec(1, 4, width_ratios=[2, 1, 1, 1], wspace=0.4)
 
     # 5a. Max response current (min/max of hotspot+nullspot)
-    ax_mc = fig.add_subplot(gs_s1[0, 0:2])
+    ax_mc = fig.add_subplot(gs_s1[0, 0])
     g, lb, cl = [], [], []
     if np.any(hs_mask):
         g.append(dr["spot_min"][hs_mask].tolist()); lb.append("Min HS"); cl.append((*red,  0.8))
@@ -1585,7 +1586,7 @@ def _plot_search_depth(
     _despine(ax_mc)
 
     # 5b. Max ctrl current
-    ax_cc = fig.add_subplot(gs_s1[0, 2])
+    ax_cc = fig.add_subplot(gs_s1[0, 1])
     ctrl_min_v = dr.get("ctrl_min", np.array([]))
     ctrl_max_v = dr.get("ctrl_max", np.array([]))
     _cm = [v for v in ctrl_min_v if not np.isnan(v)]
@@ -1597,7 +1598,7 @@ def _plot_search_depth(
     _despine(ax_cc)
 
     # 5c. Net total charge (AUC)
-    ax_na = fig.add_subplot(gs_s1[0, 3])
+    ax_na = fig.add_subplot(gs_s1[0, 2])
     g, lb, cl = [], [], []
     if np.any(hs_mask):
         g.append(dr["spot_auc"][hs_mask].tolist()); lb.append("Hotspot"); cl.append((*red,  0.8))
@@ -1611,7 +1612,7 @@ def _plot_search_depth(
     _despine(ax_na)
 
     # 5d. Absolute total charge
-    ax_aa = fig.add_subplot(gs_s1[0, 4])
+    ax_aa = fig.add_subplot(gs_s1[0, 3])
     abs_s = dr.get("spot_abs_auc", np.array([]))
     abs_c = dr.get("ctrl_abs_auc", np.array([]))
     g, lb, cl = [], [], []
@@ -1627,10 +1628,10 @@ def _plot_search_depth(
     _despine(ax_aa)
 
     # ── 6. Stats row 2 [3, 2:4]: timing + response rates ──────────────────
-    gs_s2 = gs[3, 2:4].subgridspec(1, 5, wspace=0.4)
+    gs_s2 = gs[3, 2:4].subgridspec(1, 4, width_ratios=[2, 1, 1, 1], wspace=0.4)
 
     # 6a. Time to max response current
-    ax_tm = fig.add_subplot(gs_s2[0, 0:2])
+    ax_tm = fig.add_subplot(gs_s2[0, 0])
     mnt = dr.get("spot_min_time", np.array([])); mxt = dr.get("spot_max_time", np.array([]))
     g, lb, cl = [], [], []
     if len(mnt) > 0 and np.any(hs_mask):
@@ -1647,7 +1648,7 @@ def _plot_search_depth(
     _despine(ax_tm)
 
     # 6b. Time to max ctrl current
-    ax_ct = fig.add_subplot(gs_s2[0, 2])
+    ax_ct = fig.add_subplot(gs_s2[0, 1])
     cmt = dr.get("ctrl_min_time", np.array([])); cxt = dr.get("ctrl_max_time", np.array([]))
     _cmt = [v for v in cmt if not np.isnan(v)]; _cxt = [v for v in cxt if not np.isnan(v)]
     if _cmt or _cxt:
@@ -1657,7 +1658,7 @@ def _plot_search_depth(
     _despine(ax_ct)
 
     # 6c. Excitatory response rate
-    ax_er = fig.add_subplot(gs_s2[0, 3])
+    ax_er = fig.add_subplot(gs_s2[0, 2])
     er = dr.get("e_rate", np.array([])); erc = dr.get("e_rate_ctrl", np.array([]))
     g, lb, cl = [], [], []
     if len(er) > 0 and np.any(hs_mask):
@@ -1672,7 +1673,7 @@ def _plot_search_depth(
     _despine(ax_er)
 
     # 6d. Inhibitory response rate
-    ax_ir = fig.add_subplot(gs_s2[0, 4])
+    ax_ir = fig.add_subplot(gs_s2[0, 3])
     ir = dr.get("i_rate", np.array([])); irc = dr.get("i_rate_ctrl", np.array([]))
     g, lb, cl = [], [], []
     if len(ir) > 0 and np.any(hs_mask):
