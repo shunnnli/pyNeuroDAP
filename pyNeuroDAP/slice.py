@@ -689,15 +689,14 @@ def get_spot_response(
         if depth_cmap_list and spot_i < len(depth_cmap_list):
             traces = depth_cmap_list[spot_i]
             key = f"search_{si}"
-            result["traces"][key] = {
-                "opto": _to_sweeps_x_timepoints(traces),
-            }
+            result["traces"].setdefault("opto", {})[key] = _to_sweeps_x_timepoints(traces)
+
             if depth_bmap_list and spot_i < len(depth_bmap_list):
                 bl = depth_bmap_list[spot_i]
-                result["traces"][key]["baseline"] = _to_sweeps_x_timepoints(bl)
+                result["traces"].setdefault("baseline", {})[key] = _to_sweeps_x_timepoints(bl)
 
             if depth_hs_list and spot_i < len(depth_hs_list):
-                result["traces"][key]["hotspot"] = depth_hs_list[spot_i]
+                result["traces"].setdefault("hotspot", {})[key] = depth_hs_list[spot_i]
 
         # Features from Stats
         if isinstance(stats, dict):
