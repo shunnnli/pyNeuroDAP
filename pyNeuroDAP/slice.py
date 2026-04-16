@@ -2054,15 +2054,21 @@ def _plot_pair_depth(
             ax.set_xticks([]); ax.set_yticks([])
 
     # ── 2. Difference map [0:2, 2] ───────────────────────────────────────
+    # Build a per-spot AUC-difference grid using the same n_row × n_col
+    # layout as the trace grid above so every cell maps to one spot.
     ax_dmap = fig.add_subplot(gs[0:2, 2])
-    diff_resp = dr.get("diff_response")
-    if (diff_resp is not None and isinstance(diff_resp, np.ndarray)
-            and diff_resp.ndim == 2 and diff_resp.size > 0):
-        _vm = np.nanmax(np.abs(diff_resp))
+    n_common = min(n_spots1, n_spots2)
+    if n_common > 0:
+        diff_auc = spot_auc1[:n_common] - spot_auc2[:n_common]
+        padded = np.full(n_row * n_col, np.nan)
+        padded[:n_common] = diff_auc
+        diff_grid = padded.reshape(n_row, n_col)
+        valid = diff_auc[~np.isnan(diff_auc)]
+        _vm = float(np.nanmax(np.abs(valid))) if valid.size > 0 else 1.0
         _vm = _vm if _vm > 0 else 1.0
-        im  = ax_dmap.imshow(diff_resp.T, cmap="RdBu_r", aspect="auto",
-                              vmin=-_vm, vmax=_vm, origin="upper")
-        fig.colorbar(im, ax=ax_dmap, fraction=0.05, pad=0.02, label="Δ charge (pC)")
+        im = ax_dmap.imshow(diff_grid, cmap="RdBu_r", aspect="auto",
+                            vmin=-_vm, vmax=_vm, origin="upper")
+        fig.colorbar(im, ax=ax_dmap, fraction=0.05, pad=0.02, label="Δ AUC (pC)")
     ax_dmap.set_title(f"Depth {depth_val}: difference map", fontsize=9)
     ax_dmap.set_xticks([]); ax_dmap.set_yticks([])
     for sp in ax_dmap.spines.values():
