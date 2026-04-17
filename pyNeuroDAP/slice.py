@@ -262,15 +262,26 @@ def load_cells_table(cells_mat_path: Union[str, Path]) -> pd.DataFrame:
 
         df = pd.DataFrame(rows)
 
-        # Infer Vhold from response map currentMap traces
-        for idx, row in df.iterrows():
-            rmap = row.get("Response map")
-            if isinstance(rmap, dict):
-                cmap = rmap.get("currentMap")
-                if isinstance(cmap, (list, np.ndarray)):
-                    vholds = _infer_vhold_from_currentmap(cmap)
-                    if vholds is not None:
-                        df.at[idx, "Vhold"] = vholds
+        # Read per-search Vhold values directly from the MATLAB table's #refs#.
+        # The MATLAB code stores cells{c,'Vhold'} = {cellVhold} where cellVhold
+        # is a float64 column vector (one value per search). We scan #refs# for
+        # an n_cells-sized object array whose elements are float64 vectors in the
+        # plausible holding-potential range (-400 … +200 mV).
+        vhold_by_cell = _read_vhold_from_refs(f, len(df))
+        if vhold_by_cell is not None:
+            for df_idx, vh_vec in enumerate(vhold_by_cell):
+                if df_idx < len(df):
+                    df.at[df_idx, "Vhold"] = vh_vec.tolist()
+        else:
+            # Fallback: infer sign-only Vhold from trace data
+            for idx, row in df.iterrows():
+                rmap = row.get("Response map")
+                if isinstance(rmap, dict):
+                    cmap = rmap.get("currentMap")
+                    if isinstance(cmap, (list, np.ndarray)):
+                        vholds = _infer_vhold_from_currentmap(cmap)
+                        if vholds is not None:
+                            df.at[idx, "Vhold"] = vholds
 
         # Extract protocol info
         if protocol_list:
@@ -284,6 +295,61 @@ def load_cells_table(cells_mat_path: Union[str, Path]) -> pd.DataFrame:
                     df.at[idx, "Protocol"] = protos
 
     return df
+
+
+def _read_vhold_from_refs(f: h5py.File, n_cells: int) -> Optional[list]:
+    """
+    Scan ``#refs#`` for the ``Vhold`` column of the MATLAB cells table.
+
+    The MATLAB code stores ``cells{c,'Vhold'} = {cellVhold}`` where
+    ``cellVhold`` is a float64 column vector with one value per search.
+    In HDF5 this appears as an *n_cells*-element object array whose
+    dereferenced elements are float64 vectors with values in the typical
+    patch-clamp holding-potential range (≈ −300 … +100 mV).
+
+    Returns a list of length *n_cells*, each element being a 1-D float64
+    numpy array of per-search Vhold values, or ``None`` if not found.
+    """
+    if n_cells == 0:
+        return None
+    refs = f.get("#refs#")
+    if refs is None:
+        return None
+
+    for k in sorted(refs.keys()):
+        item = refs[k]
+        if not isinstance(item, h5py.Dataset):
+            continue
+        data = item[()]
+        if data.dtype != object or data.size != n_cells:
+            continue
+        flat = data.flatten()
+        cell_vholds: list = []
+        ok = True
+        try:
+            for ref in flat:
+                elem_ds = f[ref]
+                if not isinstance(elem_ds, h5py.Dataset):
+                    ok = False
+                    break
+                elem = elem_ds[()]
+                if elem.dtype.kind != "f":
+                    ok = False
+                    break
+                vals = elem.flatten().astype(float)
+                if vals.size == 0:
+                    ok = False
+                    break
+                # All values must be in a plausible holding-potential range
+                if not (np.all(vals > -400.0) and np.all(vals < 200.0)):
+                    ok = False
+                    break
+                cell_vholds.append(vals)
+        except Exception:
+            ok = False
+        if ok and len(cell_vholds) == n_cells:
+            return cell_vholds
+    return None
 
 
 def _match_by_count(source_counts: list[int], target_counts: list[int]) -> list[int]:
@@ -318,6 +384,25 @@ def _match_by_count(source_counts: list[int], target_counts: list[int]) -> list[
         return assignment
 
     return list(range(n_tgt))
+
+
+def _unwrap_single_cell(obj):
+    """
+    If *obj* is a (1, 1) numpy object array (i.e. a MATLAB ``cell(1,1)``
+    that was not yet unwrapped), return its single element.  Otherwise
+    return *obj* unchanged.
+
+    This handles the common case where a single-depth search stores its
+    per-depth data as ``cell(1,1)`` in MATLAB, which arrives in Python as
+    a (1, 1) numpy object array rather than the per-depth content directly.
+    """
+    if (
+        isinstance(obj, np.ndarray)
+        and obj.dtype == object
+        and obj.shape == (1, 1)
+    ):
+        return obj.flat[0]
+    return obj
 
 
 def _infer_vhold_from_currentmap(cmap) -> Optional[list]:
@@ -670,9 +755,17 @@ def get_spot_response(
             continue
         di = int(depth_idx[0])
 
-        cmap = _nested_index(rmap.get("currentMap"), si)
-        bmap = _nested_index(rmap.get("baselineMap"), si)
-        hotspot_data = _nested_index(rmap.get("hotspot"), si)
+        # For single-depth searches MATLAB stores searchCurrentMap as
+        # cell(1,1), which arrives as a (1,1) numpy object array.  Unwrap
+        # that extra layer so that indexing by di=0 gives the per-spot cell
+        # rather than the nested cell-of-cells.
+        cmap_raw = _nested_index(rmap.get("currentMap"), si)
+        bmap_raw = _nested_index(rmap.get("baselineMap"), si)
+        hotspot_raw = _nested_index(rmap.get("hotspot"), si)
+
+        cmap = _unwrap_single_cell(cmap_raw)
+        bmap = _unwrap_single_cell(bmap_raw)
+        hotspot_data = _unwrap_single_cell(hotspot_raw)
 
         depth_cmap = _nested_index(cmap, di)
         depth_bmap = _nested_index(bmap, di)
@@ -688,15 +781,22 @@ def get_spot_response(
 
         if depth_cmap_list and spot_i < len(depth_cmap_list):
             traces = depth_cmap_list[spot_i]
-            key = f"search_{si}"
-            result["traces"].setdefault("opto", {})[key] = _to_sweeps_x_timepoints(traces)
+            # Only accept float-dtype arrays as electrophysiology traces.
+            # Non-float data (e.g. hotspot-sequence integers that can appear
+            # when nesting is mis-read) is silently skipped.
+            if isinstance(traces, np.ndarray) and traces.dtype.kind != "f":
+                traces = None
+            if traces is not None:
+                key = f"search_{si}"
+                result["traces"].setdefault("opto", {})[key] = _to_sweeps_x_timepoints(traces)
 
-            if depth_bmap_list and spot_i < len(depth_bmap_list):
-                bl = depth_bmap_list[spot_i]
-                result["traces"].setdefault("baseline", {})[key] = _to_sweeps_x_timepoints(bl)
+                if depth_bmap_list and spot_i < len(depth_bmap_list):
+                    bl = depth_bmap_list[spot_i]
+                    if isinstance(bl, np.ndarray) and bl.dtype.kind == "f":
+                        result["traces"].setdefault("baseline", {})[key] = _to_sweeps_x_timepoints(bl)
 
-            if depth_hs_list and spot_i < len(depth_hs_list):
-                result["traces"].setdefault("hotspot", {})[key] = depth_hs_list[spot_i]
+                if depth_hs_list and spot_i < len(depth_hs_list):
+                    result["traces"].setdefault("hotspot", {})[key] = depth_hs_list[spot_i]
 
         # Features from Stats
         if isinstance(stats, dict):
@@ -1081,9 +1181,9 @@ def analyze_dmd_search(
 
     for di, depth_val in enumerate(search_depths):
         depth_val = int(depth_val)
-        cmap = _nested_index(rmap.get("currentMap"), search_idx)
-        bmap = _nested_index(rmap.get("baselineMap"), search_idx)
-        hotspot_data = _nested_index(rmap.get("hotspot"), search_idx)
+        cmap = _unwrap_single_cell(_nested_index(rmap.get("currentMap"), search_idx))
+        bmap = _unwrap_single_cell(_nested_index(rmap.get("baselineMap"), search_idx))
+        hotspot_data = _unwrap_single_cell(_nested_index(rmap.get("hotspot"), search_idx))
         resp_map = _nested_index(rmap.get("responseMap"), search_idx)
         spot_loc = _nested_index(
             _nested_index(rmap.get("spotLocation"), search_idx), di
@@ -1810,11 +1910,12 @@ def analyze_dmd_search_pair(
 
         # Load traces for each search
         def _get_depth_traces(sidx, di):
-            cm = _nested_index(rmap.get("currentMap"), sidx)
-            bm = _nested_index(rmap.get("baselineMap"), sidx)
+            cm = _unwrap_single_cell(_nested_index(rmap.get("currentMap"), sidx))
+            bm = _unwrap_single_cell(_nested_index(rmap.get("baselineMap"), sidx))
+            hs_raw = _unwrap_single_cell(_nested_index(rmap.get("hotspot"), sidx))
             dcm = _nested_index(cm, di)
             dbm = _nested_index(bm, di)
-            hs = _nested_index(_nested_index(rmap.get("hotspot"), sidx), di)
+            hs = _nested_index(hs_raw, di)
             return dcm, dbm, hs
 
         dcm1_raw, dbm1_raw, hs1 = _get_depth_traces(s1_idx, di1)
