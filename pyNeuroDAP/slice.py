@@ -9,6 +9,7 @@ exposes them as pandas DataFrames, and provides Python equivalents of
 
 from __future__ import annotations
 
+import builtins
 import os
 import re
 import glob
@@ -28,6 +29,7 @@ from .plots import plot_sem, plotScatterBar
 # ---------------------------------------------------------------------------
 # Internal: MATLAB v7.3 HDF5 table reader
 # ---------------------------------------------------------------------------
+
 
 def _h5_read_item(f: h5py.File, item):
     """Recursively dereference and read a single HDF5 item into Python."""
@@ -671,9 +673,71 @@ def _normalize_search_list(obj) -> list:
     return [obj]
 
 
+def _normalize_search_list_branch(obj) -> str:
+    """Which branch :func:`_normalize_search_list` uses (for debug)."""
+    if obj is None:
+        return "None -> []"
+    if isinstance(obj, np.ndarray) and obj.dtype == object:
+        return f"object ndarray shape={obj.shape} -> {obj.size} elements"
+    if isinstance(obj, list):
+        return f"list len={len(obj)}"
+    if isinstance(obj, np.ndarray) and obj.ndim == 1:
+        return (
+            f"1d ndarray dtype={obj.dtype} shape={obj.shape} "
+            f"-> single-element list (wrong if multiple spots expected)"
+        )
+    if isinstance(obj, np.ndarray):
+        return f"ndarray dtype={obj.dtype} shape={obj.shape} -> single-element list"
+    return f"other {builtins.type(obj).__name__}"
+
+
+def _debug_depth_cmap_pre_normalize(depth_cmap, dprint) -> None:
+    """Layout of *depth_cmap* as loaded from MAT before per-spot list flattening."""
+    if depth_cmap is None:
+        dprint("  depth_cmap (pre-norm): None")
+        return
+    if isinstance(depth_cmap, np.ndarray):
+        dprint(
+            f"  depth_cmap (pre-norm): dtype={depth_cmap.dtype!r} shape={depth_cmap.shape!r}"
+        )
+        if depth_cmap.dtype == object and depth_cmap.size > 0:
+            el0 = depth_cmap.flat[0]
+            if isinstance(el0, np.ndarray):
+                dprint(
+                    f"  depth_cmap.flat[0]: ndarray shape={el0.shape!r} dtype={el0.dtype!r}"
+                )
+            else:
+                dprint(f"  depth_cmap.flat[0]: {builtins.type(el0).__name__!r}")
+        elif depth_cmap.dtype != object:
+            dprint(
+                "  hint: dtype is not object — per-spot MATLAB cells may be missing; "
+                "expect object array of refs to #refs# datasets"
+            )
+    else:
+        dprint(f"  depth_cmap (pre-norm): type={builtins.type(depth_cmap).__name__!r}")
+
+
+def _debug_nonfloat_leaf(traces, *, spot_i: int, dprint) -> None:
+    """One line when opto leaf is not float (uint64 zeros vs real ints)."""
+    if not isinstance(traces, np.ndarray):
+        dprint(f"  leaf[{spot_i}]: not ndarray ({builtins.type(traces).__name__})")
+        return
+    flat = traces.ravel()
+    all_zero = bool(flat.size and np.all(flat == 0))
+    looks_like_canonical_empty = (
+        traces.dtype == np.uint64 and traces.shape == (2,) and all_zero
+    )
+    dprint(
+        f"  leaf[{spot_i}]: dtype={traces.dtype} shape={traces.shape} "
+        f"all_zero={all_zero} canonical_empty_guess={looks_like_canonical_empty} — "
+        f"if True, this spot has no stored trace (MATLAB empty cell)."
+    )
+
+
 # ---------------------------------------------------------------------------
 # 2) Spot response accessor
 # ---------------------------------------------------------------------------
+
 
 def get_spot_response(
     cells_df: pd.DataFrame,
@@ -684,6 +748,7 @@ def get_spot_response(
     search_idx: Optional[int] = None,
     results_dir: Optional[Union[str, Path]] = None,
     type: Optional[Union[str, list]] = None,
+    debug: bool = False,
 ) -> dict:
     """
     Return the response (all sweeps) for a given cell / depth / hotspot.
@@ -697,8 +762,15 @@ def get_spot_response(
     depth : int
         Depth value (1, 2, 3, ...).
     hotspot : int or tuple
-        Spot selector. If int, zero-based index into the spot list for that depth.
-        If tuple ``(row, col)`` (zero-indexed), selects by grid position.
+        Spot selector.
+
+        - If ``int``: selects the *k-th recorded spot* at this depth (0-based),
+          i.e. the k-th entry whose trace is present (non-empty float array)
+          in ``currentMap``. This matches MATLAB usage where the first non-empty
+          entry is treated as spot index 0 even if earlier rows are ``[]``.
+        - If tuple/list ``(row, col)`` (0-based): selects by grid position.
+          When ``spot_loc`` is available, this is resolved by matching the
+          spot's (xStart, yStart) tile in ``spot_loc`` (robust to sparse grids).
     search_idx : int, optional
         Which search (0-based). If None, returns data from all searches that
         include the requested depth, grouped by search.
@@ -706,12 +778,19 @@ def get_spot_response(
         Results directory (used for loading spots_*.mat if needed).
     type : str or list of str, optional
         Subset selector: ``'traces'``, ``'features'``, ``'meta'``, or a list.
+    debug : bool, optional
+        If True, print indexing and shape diagnostics (use to trace empty opto
+        traces, depth / spot_i mismatches, or dtype skips).
 
     Returns
     -------
     dict
         Keys ``meta``, ``traces``, ``features`` (filtered by *type*).
     """
+    def _dprint(msg: str) -> None:
+        if debug:
+            print(msg, flush=True)
+
     cell_row = cells_df[cells_df["Cell"] == cell]
     if cell_row.empty:
         raise ValueError(f"Cell {cell} not found in cells_df")
@@ -724,6 +803,12 @@ def get_spot_response(
         raise ValueError(f"No Response map for cell {cell}")
 
     depths_all = _normalize_search_list(rmap.get("depths"))
+
+    if debug:
+        _dprint(
+            f"[get_spot_response] cell={cell} depth={depth!r} hotspot={hotspot!r} "
+            f"search_idx={search_idx!r} n_searches={len(depths_all)}"
+        )
 
     # Determine which searches to process
     search_indices = (
@@ -746,14 +831,24 @@ def get_spot_response(
     for si in search_indices:
         search_depths = depths_all[si] if si < len(depths_all) else None
         if search_depths is None:
+            _dprint(f"[get_spot_response] search={si}: skip (no entry in depths_all)")
             continue
         if isinstance(search_depths, (int, float)):
             search_depths = [search_depths]
         depth_arr = np.asarray(search_depths)
         depth_idx = np.where(np.isclose(depth_arr, depth))[0]
         if len(depth_idx) == 0:
+            _dprint(
+                f"[get_spot_response] search={si}: skip (requested depth {depth!r} "
+                f"not in search_depths {depth_arr.tolist()})"
+            )
             continue
         di = int(depth_idx[0])
+        if debug and len(depth_idx) > 1:
+            _dprint(
+                f"[get_spot_response] search={si}: multiple depth_idx={depth_idx.tolist()} "
+                f"-> di={di}"
+            )
 
         # For single-depth searches MATLAB stores searchCurrentMap as
         # cell(1,1), which arrives as a (1,1) numpy object array.  Unwrap
@@ -767,17 +862,86 @@ def get_spot_response(
         bmap = _unwrap_single_cell(bmap_raw)
         hotspot_data = _unwrap_single_cell(hotspot_raw)
 
+        spot_loc = _nested_index(_nested_index(rmap.get("spotLocation"), si), di)
+
+        # Determine expected spot count from spot_loc (when available).
+        n_spots_expected = None
+        if spot_loc is not None:
+            try:
+                sl = np.asarray(spot_loc)
+                if sl.ndim == 2 and sl.shape[0] == 4:
+                    n_spots_expected = int(sl.shape[1])
+            except Exception:
+                n_spots_expected = None
+
+        # Hotspot/maxSearch/final searches are often stored as:
+        #   per-search -> per-spot
+        # instead of:
+        #   per-search -> per-depth -> per-spot
+        #
+        # We choose the container whose normalized list length best matches
+        # spot_loc's expected spot count.
         depth_cmap = _nested_index(cmap, di)
         depth_bmap = _nested_index(bmap, di)
         depth_hs = _nested_index(hotspot_data, di)
-        spot_loc = _nested_index(_nested_index(rmap.get("spotLocation"), si), di)
 
-        # Resolve spot index
-        spot_i = _resolve_spot_index(hotspot, depth, spot_loc)
+        list_cmap_A = _normalize_search_list(depth_cmap)   # depth-style
+        list_cmap_B = _normalize_search_list(cmap)         # spot-style
 
-        depth_cmap_list = _normalize_search_list(depth_cmap)
-        depth_bmap_list = _normalize_search_list(depth_bmap)
-        depth_hs_list = _normalize_search_list(depth_hs)
+        mode = "depth"
+        if n_spots_expected is not None:
+            if len(list_cmap_B) == n_spots_expected and len(list_cmap_A) != n_spots_expected:
+                mode = "spot"
+            elif len(list_cmap_A) == n_spots_expected:
+                mode = "depth"
+            elif len(list_cmap_B) == n_spots_expected:
+                mode = "spot"
+
+        if mode == "spot":
+            depth_cmap_list = list_cmap_B
+            depth_bmap_list = _normalize_search_list(bmap)
+            depth_hs_list = _normalize_search_list(hotspot_data)
+        else:
+            depth_cmap_list = list_cmap_A
+            depth_bmap_list = _normalize_search_list(depth_bmap)
+            depth_hs_list = _normalize_search_list(depth_hs)
+
+        # Resolve spot index (see docstring for selector semantics)
+        spot_i = _resolve_spot_index(
+            hotspot,
+            depth=depth,
+            spot_loc=spot_loc,
+            depth_cmap_list=depth_cmap_list,
+        )
+
+        if debug:
+            _dprint(
+                f"[get_spot_response] search={si}: di={di} depth_val={depth_arr.flat[di]!r} "
+                f"mode={mode!r} n_spots_expected={n_spots_expected!r} "
+                f"n_spots_list={len(depth_cmap_list)} "
+                f"branch_A={_normalize_search_list_branch(depth_cmap)!r} "
+                f"branch_B={_normalize_search_list_branch(cmap)!r}"
+            )
+            if spot_loc is not None:
+                _sl = np.asarray(spot_loc)
+                _dprint(
+                    f"  spot_loc shape={_sl.shape} | spot_i={spot_i}"
+                )
+            else:
+                _dprint(
+                    f"  spot_loc=None | spot_i={spot_i}"
+                )
+
+        if not depth_cmap_list:
+            _dprint(
+                f"[get_spot_response] search={si}: no traces — "
+                f"depth_cmap_list is empty after normalize"
+            )
+        elif spot_i >= len(depth_cmap_list):
+            _dprint(
+                f"[get_spot_response] search={si}: no traces — "
+                f"spot_i={spot_i} >= n_spots={len(depth_cmap_list)} (out of range)"
+            )
 
         if depth_cmap_list and spot_i < len(depth_cmap_list):
             traces = depth_cmap_list[spot_i]
@@ -785,10 +949,17 @@ def get_spot_response(
             # Non-float data (e.g. hotspot-sequence integers that can appear
             # when nesting is mis-read) is silently skipped.
             if isinstance(traces, np.ndarray) and traces.dtype.kind != "f":
+                _dprint(
+                    f"[get_spot_response] search={si}: skip opto (need float64/float32), "
+                    f"got {traces.dtype}"
+                )
+                _debug_nonfloat_leaf(traces, spot_i=spot_i, dprint=_dprint)
                 traces = None
             if traces is not None:
                 key = f"search_{si}"
-                result["traces"].setdefault("opto", {})[key] = _to_sweeps_x_timepoints(traces)
+                arr = _to_sweeps_x_timepoints(traces)
+                result["traces"].setdefault("opto", {})[key] = arr
+                _dprint(f"[get_spot_response] search={si}: OK {key} shape={arr.shape} dtype={arr.dtype}")
 
                 if depth_bmap_list and spot_i < len(depth_bmap_list):
                     bl = depth_bmap_list[spot_i]
@@ -833,15 +1004,76 @@ def _to_sweeps_x_timepoints(arr) -> np.ndarray:
 
 
 def _resolve_spot_index(
-    hotspot: Union[int, tuple, list], depth: int, spot_loc
+    hotspot: Union[int, tuple, list],
+    *,
+    depth: int,
+    spot_loc,
+    depth_cmap_list: list,
 ) -> int:
-    """Convert a hotspot selector to a 0-based spot index."""
+    """
+    Convert a hotspot selector to a 0-based index into ``depth_cmap_list``.
+
+    Semantics:
+      - int -> k-th recorded (non-empty float) spot
+      - (row, col) -> grid position, resolved via spot_loc when available
+    """
+
+    # --- int: k-th recorded spot (skip canonical-empty leaves) ---
     if isinstance(hotspot, int):
-        return hotspot
+        recorded = [
+            i
+            for i, leaf in enumerate(depth_cmap_list)
+            if isinstance(leaf, np.ndarray) and leaf.dtype.kind == "f" and leaf.size > 0
+        ]
+        if not recorded:
+            raise ValueError(
+                "No recorded (non-empty) opto traces found at this depth/search; "
+                "cannot map integer hotspot index."
+            )
+        if hotspot < 0 or hotspot >= len(recorded):
+            raise IndexError(
+                f"hotspot={hotspot} out of range for recorded spots "
+                f"(have {len(recorded)} recorded spots; max index {len(recorded)-1})."
+            )
+        return recorded[hotspot]
+
+    # --- (row, col): grid position ---
     if isinstance(hotspot, (tuple, list)) and len(hotspot) == 2:
-        row, col = hotspot
+        row, col = int(hotspot[0]), int(hotspot[1])
+
+        # Prefer resolving through spot_loc (sparse grids supported)
+        if spot_loc is not None:
+            sl = np.asarray(spot_loc)
+            # Expected shape: (4, nSpots) where rows are [x1,x2,y1,y2]
+            if sl.ndim == 2 and sl.shape[0] == 4 and sl.shape[1] > 0:
+                x1 = sl[0, :]
+                y1 = sl[2, :]
+                col_starts = np.unique(x1)
+                row_starts = np.unique(y1)
+                col_starts.sort()
+                row_starts.sort()
+
+                if row < 0 or row >= len(row_starts) or col < 0 or col >= len(col_starts):
+                    raise IndexError(
+                        f"(row,col)={hotspot} out of range for this grid "
+                        f"(n_rows={len(row_starts)}, n_cols={len(col_starts)})."
+                    )
+
+                tx = col_starts[col]
+                ty = row_starts[row]
+                hit = np.where((x1 == tx) & (y1 == ty))[0]
+                if hit.size == 0:
+                    raise ValueError(
+                        f"(row,col)={hotspot} does not exist in recorded spot_loc grid "
+                        "(tile missing / sparse grid)."
+                    )
+                return int(hit[0])
+
+        # Fallback: assume full 2^depth grid (dense)
         n_cols = 2**depth
         return row * n_cols + col
+
+    # Default fallback (keep behavior predictable)
     return 0
 
 
