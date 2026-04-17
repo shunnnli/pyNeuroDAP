@@ -925,7 +925,8 @@ def get_spot_response(
                 if sl.ndim == 2 and sl.shape[0] == 4 and spot_i < sl.shape[1]:
                     # [x1, x2, y1, y2] in pixel coordinates (MATLAB 1-based in file)
                     box = sl[:, spot_i].tolist()
-                    result["meta"].setdefault("spot_loc", {})[key] = box
+                    # Keep pixel box under a dedicated key
+                    result["meta"].setdefault("spot_box", {})[key] = box
 
                     # Also provide (row, col) indices derived from box start coords.
                     # We define (row, col) from the sorted unique tile starts (y1, x1).
@@ -940,6 +941,9 @@ def get_spot_response(
                     col = int(np.where(col_starts == x1)[0][0]) if np.any(col_starts == x1) else None
                     row = int(np.where(row_starts == y1)[0][0]) if np.any(row_starts == y1) else None
                     if row is not None and col is not None:
+                        # Requested naming: expose (row, col) as spot_loc
+                        result["meta"].setdefault("spot_loc", {})[key] = [row, col]
+                        # Backward-compat (older notebooks may reference spot_rc)
                         result["meta"].setdefault("spot_rc", {})[key] = [row, col]
             except Exception:
                 pass
