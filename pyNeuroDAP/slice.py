@@ -914,6 +914,36 @@ def get_spot_response(
             depth_cmap_list=depth_cmap_list,
         )
 
+        # Store resolved spot index + location in meta (per search).
+        # Note: spot_i is an index into the per-search spot container and may
+        # differ across searches when hotspot is given as an integer (k-th recorded).
+        key = f"search_{si}"
+        result["meta"].setdefault("spot_index", {})[key] = int(spot_i)
+        if spot_loc is not None:
+            try:
+                sl = np.asarray(spot_loc)
+                if sl.ndim == 2 and sl.shape[0] == 4 and spot_i < sl.shape[1]:
+                    # [x1, x2, y1, y2] in pixel coordinates (MATLAB 1-based in file)
+                    box = sl[:, spot_i].tolist()
+                    result["meta"].setdefault("spot_loc", {})[key] = box
+
+                    # Also provide (row, col) indices derived from box start coords.
+                    # We define (row, col) from the sorted unique tile starts (y1, x1).
+                    x1_all = sl[0, :]
+                    y1_all = sl[2, :]
+                    col_starts = np.unique(x1_all)
+                    row_starts = np.unique(y1_all)
+                    col_starts.sort()
+                    row_starts.sort()
+                    x1 = sl[0, spot_i]
+                    y1 = sl[2, spot_i]
+                    col = int(np.where(col_starts == x1)[0][0]) if np.any(col_starts == x1) else None
+                    row = int(np.where(row_starts == y1)[0][0]) if np.any(row_starts == y1) else None
+                    if row is not None and col is not None:
+                        result["meta"].setdefault("spot_rc", {})[key] = [row, col]
+            except Exception:
+                pass
+
         if debug:
             _dprint(
                 f"[get_spot_response] search={si}: di={di} depth_val={depth_arr.flat[di]!r} "
@@ -956,7 +986,6 @@ def get_spot_response(
                 _debug_nonfloat_leaf(traces, spot_i=spot_i, dprint=_dprint)
                 traces = None
             if traces is not None:
-                key = f"search_{si}"
                 arr = _to_sweeps_x_timepoints(traces)
                 result["traces"].setdefault("opto", {})[key] = arr
                 _dprint(f"[get_spot_response] search={si}: OK {key} shape={arr.shape} dtype={arr.dtype}")
