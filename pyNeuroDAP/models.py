@@ -1,8 +1,11 @@
-import autograd.numpy as np
-import autograd.numpy.random as npr
+try:
+    import autograd.numpy as np
+    import autograd.numpy.random as npr
+except ImportError:
+    import numpy as np
+    import numpy.random as npr
 
 import matplotlib.pyplot as plt
-import pyNeuroDAP as ndap
 
 import seaborn as sns
 color_names = ["windows blue", "red", "amber", "faded green"]
@@ -10,17 +13,25 @@ colors = sns.xkcd_palette(color_names)
 sns.set_style("white")
 sns.set_context("talk")
 
-
-# Import SSM only when needed
+_SSM_AVAILABLE = False
 try:
     import ssm.ssm as ssm
     from ssm.util import find_permutation
+    _SSM_AVAILABLE = True
 except ImportError:
     try:
         import ssm
         from ssm.util import find_permutation
+        _SSM_AVAILABLE = True
     except ImportError:
-        raise ImportError("SSM library not found. Please install it with: pip install -e . from the ssm directory")
+        pass
+
+def _require_ssm():
+    if not _SSM_AVAILABLE:
+        raise ImportError(
+            "SSM library not found. Install it with: pip install ssm, "
+            "or install pyNeuroDAP with SSM support: pip install pyNeuroDAP[full]"
+        )
 
 # =============================================================================
 # Main Wrapper Functions for rSLDS Analysis
@@ -77,7 +88,8 @@ def prepare_rslds_data(data, trial_types=None, zscore=True, n_classes=2,
 
     # Downsample data
     if downsample:
-        data = ndap.downsample(data, target_bin_size_ms=target_bin_size_ms, original_bin_size_ms=bin_size_ms)
+        from .spikes import downsample
+        data = downsample(data, target_bin_size_ms=target_bin_size_ms, original_bin_size_ms=bin_size_ms)
         print(f"[prepare_rslds_data] Data downsampled to {target_bin_size_ms} ms")
 
     # Make sure to fill nan with 0
@@ -139,14 +151,7 @@ def fit_rslds_model(data, n_states=4, n_latent_dims=2, method="laplace_em", tria
     """
     (docstring unchanged)
     """
-    # Import SSM only when needed (unchanged)
-    try:
-        import ssm.ssm as ssm
-    except ImportError:
-        try:
-            import ssm
-        except ImportError:
-            raise ImportError("SSM library not found. Please install it with: pip install -e . from the ssm directory")
+    _require_ssm()
 
     if random_seed is not None:
         npr.seed(random_seed)

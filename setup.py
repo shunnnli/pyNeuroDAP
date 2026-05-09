@@ -49,6 +49,12 @@ setup(
         "pathlib2>=2.3.0; python_version<'3.4'",
     ],
     extras_require={
+        "full": [
+            "ssm>=0.3.0",
+            "autograd>=1.3",
+            "jax>=0.3.0",
+            "jaxlib>=0.3.0",
+        ],
         "dev": [
             "pytest>=6.0",
             "pytest-cov>=2.0",

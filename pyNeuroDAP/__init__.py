@@ -6,7 +6,7 @@ A comprehensive package for analyzing neural data including:
 - Trial management and organization
 - Session data management with HDF5
 - Visualization and plotting tools
-- rSLDS modeling for neural dynamics
+- rSLDS modeling for neural dynamics (optional, requires SSM: pip install pyNeuroDAP[full])
 
 Author: Shun Li
 """
@@ -38,19 +38,23 @@ from .optotag import (
     run_salt,
 )
 
-from .models import (
-    fit_rslds_model,
-    get_inferred_states,
-    plot_rslds_trajectory,
-    plot_rslds_observations,
-    plot_rslds_dynamics,
-    plot_rslds_elbo,
-    save_rslds_model,
-    load_rslds_model,
-    prepare_rslds_data,
-    set_plot_lims,
-    separate_rslds_tuple,
-)
+try:
+    from .models import (
+        fit_rslds_model,
+        get_inferred_states,
+        plot_rslds_trajectory,
+        plot_rslds_observations,
+        plot_rslds_dynamics,
+        plot_rslds_elbo,
+        save_rslds_model,
+        load_rslds_model,
+        prepare_rslds_data,
+        set_plot_lims,
+        separate_rslds_tuple,
+    )
+    _SSM_AVAILABLE = True
+except ImportError:
+    _SSM_AVAILABLE = False
 
 from .trials import (
     get_onset_times,
@@ -136,19 +140,6 @@ __all__ = [
     'salt',
     'run_salt',
 
-    # SSM-based rSLDS modeling
-    'fit_rslds_model',
-    'get_inferred_states',
-    'plot_rslds_trajectory',
-    'plot_rslds_observations',
-    'plot_rslds_dynamics',
-    'plot_rslds_elbo',
-    'save_rslds_model',
-    'load_rslds_model',
-    'prepare_rslds_data',
-    'set_plot_lims',
-    'separate_rslds_tuple',
-    
     # Trial management
     'get_onset_times',
     'get_trial_table',
@@ -204,3 +195,18 @@ __all__ = [
     'analyze_dmd_search',
     'analyze_dmd_search_pair',
 ]
+
+if _SSM_AVAILABLE:
+    __all__ += [
+        'fit_rslds_model',
+        'get_inferred_states',
+        'plot_rslds_trajectory',
+        'plot_rslds_observations',
+        'plot_rslds_dynamics',
+        'plot_rslds_elbo',
+        'save_rslds_model',
+        'load_rslds_model',
+        'prepare_rslds_data',
+        'set_plot_lims',
+        'separate_rslds_tuple',
+    ]
