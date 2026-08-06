@@ -13,7 +13,7 @@ def read_requirements():
 
 setup(
     name="pyNeuroDAP",
-    version="1.1.0",
+    version="1.2.0",
     author="Shun Li",
     author_email="shunli@g.harvard.edu",  # Add your email if desired
     description="Neural Data Analysis Package for spike processing, trial management, and modeling",
