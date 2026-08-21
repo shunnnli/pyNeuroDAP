@@ -269,7 +269,15 @@ def load_cells_table(cells_mat_path: Union[str, Path]) -> pd.DataFrame:
         # is a float64 column vector (one value per search). We scan #refs# for
         # an n_cells-sized object array whose elements are float64 vectors in the
         # plausible holding-potential range (-400 … +200 mV).
-        vhold_by_cell = _read_vhold_from_refs(f, len(df))
+        expected_search_counts = [
+            len(epochs) if isinstance(epochs, list) else 0
+            for epochs in df["Epochs"]
+        ]
+        vhold_by_cell = _read_vhold_from_refs(
+            f,
+            len(df),
+            expected_search_counts=expected_search_counts,
+        )
         if vhold_by_cell is not None:
             for df_idx, vh_vec in enumerate(vhold_by_cell):
                 if df_idx < len(df):
@@ -299,7 +307,11 @@ def load_cells_table(cells_mat_path: Union[str, Path]) -> pd.DataFrame:
     return df
 
 
-def _read_vhold_from_refs(f: h5py.File, n_cells: int) -> Optional[list]:
+def _read_vhold_from_refs(
+    f: h5py.File,
+    n_cells: int,
+    expected_search_counts: Optional[Sequence[int]] = None,
+) -> Optional[list]:
     """
     Scan ``#refs#`` for the ``Vhold`` column of the MATLAB cells table.
 
@@ -308,6 +320,10 @@ def _read_vhold_from_refs(f: h5py.File, n_cells: int) -> Optional[list]:
     In HDF5 this appears as an *n_cells*-element object array whose
     dereferenced elements are float64 vectors with values in the typical
     patch-clamp holding-potential range (≈ −300 … +100 mV).
+
+    ``#refs#`` can also contain n-cells-sized arrays of floating-point spot
+    indices.  When *expected_search_counts* is supplied, prefer the candidate
+    whose vector lengths match the number of epochs for every cell.
 
     Returns a list of length *n_cells*, each element being a 1-D float64
     numpy array of per-search Vhold values, or ``None`` if not found.
@@ -318,6 +334,15 @@ def _read_vhold_from_refs(f: h5py.File, n_cells: int) -> Optional[list]:
     if refs is None:
         return None
 
+    expected = None
+    if expected_search_counts is not None:
+        counts = [int(count) for count in expected_search_counts]
+        if len(counts) == n_cells:
+            expected = counts
+
+    fallback_candidate = None
+    best_partial_candidate = None
+    best_partial_score = 0
     for k in sorted(refs.keys()):
         item = refs[k]
         if not isinstance(item, h5py.Dataset):
@@ -350,8 +375,31 @@ def _read_vhold_from_refs(f: h5py.File, n_cells: int) -> Optional[list]:
         except Exception:
             ok = False
         if ok and len(cell_vholds) == n_cells:
-            return cell_vholds
-    return None
+            if fallback_candidate is None:
+                fallback_candidate = cell_vholds
+
+            if expected is not None:
+                if all(
+                    count == 0 or len(values) == count
+                    for values, count in zip(cell_vholds, expected)
+                ):
+                    return cell_vholds
+
+                # If incomplete epoch metadata prevents a full match, retain
+                # the candidate matching the largest number of known counts.
+                match_score = sum(
+                    count > 0 and len(values) == count
+                    for values, count in zip(cell_vholds, expected)
+                )
+                if match_score > best_partial_score:
+                    best_partial_candidate = cell_vholds
+                    best_partial_score = match_score
+
+    if best_partial_candidate is not None:
+        return best_partial_candidate
+
+    # Backward-compatible fallback for files without usable epoch counts.
+    return fallback_candidate
 
 
 def _match_by_count(source_counts: list[int], target_counts: list[int]) -> list[int]:
