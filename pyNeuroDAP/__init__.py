@@ -88,6 +88,7 @@ from .plots import (
     convert_dict_to_list,
     plot_pca,
     plot_all_units,
+    plotScatterBar,
     plot_distribution,
     generate_boot_data,
 )
@@ -170,6 +171,7 @@ __all__ = [
     'convert_dict_to_list',
     'plot_pca',
     'plot_all_units',
+    'plotScatterBar',
     'plot_distribution',
     'generate_boot_data',
 

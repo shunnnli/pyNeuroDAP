@@ -170,6 +170,7 @@ def plotScatterBar(data,
                    style='box',
                    ax=None,
                    colors=None,
+                   positions=None,
                    width=0.6,
                    scatter_alpha=0.8,
                    error_bar_width=2,
@@ -191,6 +192,8 @@ def plotScatterBar(data,
         If None, a new figure+axes is created.
     colors : list of RGBA tuples, optional
         Length-N list of fill colors for each group.
+    positions : sequence of float, optional
+        Length-N x positions. Defaults to consecutive positions starting at 0.
     width : float
         Total width allocated per group.
     scatter_alpha : float
@@ -214,7 +217,12 @@ def plotScatterBar(data,
     if len(colors) != n:
         raise ValueError(f"colors must have length {n}, got {len(colors)}")
 
-    x = np.arange(n)
+    if positions is None:
+        x = np.arange(n, dtype=float)
+    else:
+        x = np.asarray(positions, dtype=float)
+        if x.shape != (n,):
+            raise ValueError(f"positions must have length {n}, got {x.size}")
     jitter = width * 0.4
 
     if style == 'box':
@@ -236,7 +244,8 @@ def plotScatterBar(data,
             whiskerprops=dict(linewidth=error_bar_width),
             capprops=dict(linewidth=error_bar_width),
             medianprops=dict(linewidth=1),
-            flierprops=flierprops
+            flierprops=flierprops,
+            showfliers=False,
         )     
         
         # color boxes
@@ -266,7 +275,10 @@ def plotScatterBar(data,
     elif style == 'bar':
         # compute means & SEM
         means = [np.mean(g) for g in data]
-        sems  = [np.std(g, ddof=1)/np.sqrt(len(g)) for g in data]
+        sems = [
+            np.std(g, ddof=1) / np.sqrt(len(g)) if len(g) > 1 else 0.0
+            for g in data
+        ]
         # draw bars
         ax.bar(
             x,
@@ -294,14 +306,15 @@ def plotScatterBar(data,
                 ecolor=dc
             )
 
-        # overlay scatter
-        for xi, group, col in zip(x, data, colors):
-            r, g, b, _ = col
-            scat_col = (r, g, b, scatter_alpha)
-            jit = (np.random.rand(len(group)) - 0.5) * jitter
-            ax.scatter(xi + jit, group, color=scat_col, s=10)
     else:
         raise ValueError("style must be 'box' or 'bar'")
+
+    # Overlay every observation for both supported summary styles.
+    for xi, group, col in zip(x, data, colors):
+        r, g, b, _ = col
+        scat_col = (r, g, b, scatter_alpha)
+        jit = (np.random.rand(len(group)) - 0.5) * jitter
+        ax.scatter(xi + jit, group, color=scat_col, s=10)
 
     # set tick labels
     if labels is not None:
@@ -602,13 +615,26 @@ def plot_coding_directions(cd_stimulus, cd_choice, ax=None,
     return ax
 
 
-def _ecdf(x):
-    x = np.asarray(x, dtype=float)
-    x = x[np.isfinite(x)]
+def _ecdf(x, weights=None):
+    x = np.asarray(x, dtype=float).ravel()
+    if weights is None:
+        weights = np.ones(x.size, dtype=float)
+    else:
+        weights = np.asarray(weights, dtype=float).ravel()
+        if weights.shape != x.shape:
+            raise ValueError("weights must have the same shape as data.")
+
+    valid = np.isfinite(x) & np.isfinite(weights) & (weights >= 0)
+    x = x[valid]
+    weights = weights[valid]
     if x.size == 0:
         return np.array([]), np.array([])
-    x = np.sort(x)
-    y = np.arange(1, x.size + 1) / x.size
+    if weights.sum() <= 0:
+        raise ValueError("weights must contain at least one positive value.")
+    order = np.argsort(x)
+    x = x[order]
+    weights = weights[order]
+    y = np.cumsum(weights) / weights.sum()
     return x, y
 
 
@@ -670,7 +696,7 @@ def generate_boot_data(groups, n_boot=5000, random_state=0):
 
 
 def _bootstrap_null_mean(data, n_boot=5000, rng=None,
-                         boot_data=None, boot_idx=None):
+                         boot_data=None, boot_idx=None, weights=None):
     """
     Compute the permutation-null distribution of the sample mean.
 
@@ -686,22 +712,51 @@ def _bootstrap_null_mean(data, n_boot=5000, rng=None,
     P-value (both modes):
         ``pval = min(mean(sim_avg <= observed), mean(sim_avg >= observed))``
         matching ``plotDistribution.m``.
+
+    When a shared permutation null is supplied, ``weights`` are intentionally
+    ignored: both the observed and permuted means are hotspot-level means with
+    the real group size. Plot-level weights may still be used for the ECDF.
     """
+    if (boot_data is None) != (boot_idx is None):
+        raise ValueError("boot_data and boot_idx must be provided together.")
+
+    has_shared_null = boot_data is not None
     x = np.asarray(data, dtype=float).ravel()
-    x = x[np.isfinite(x)]
+    if weights is None or has_shared_null:
+        valid = np.isfinite(x)
+        sample_probabilities = None
+    else:
+        weights = np.asarray(weights, dtype=float).ravel()
+        if weights.shape != x.shape:
+            raise ValueError("weights must have the same shape as data.")
+        valid = np.isfinite(x) & np.isfinite(weights) & (weights >= 0)
+        weights = weights[valid]
+        if weights.sum() <= 0:
+            raise ValueError("weights must contain at least one positive value.")
+        sample_probabilities = weights / weights.sum()
+    x = x[valid]
     if x.size == 0:
         raise ValueError("Input data contains no finite values.")
 
-    observed_mean = float(np.mean(x))
+    observed_mean = float(
+        np.mean(x)
+        if sample_probabilities is None
+        else np.average(x, weights=sample_probabilities)
+    )
 
-    if boot_data is not None and boot_idx is not None:
+    if has_shared_null:
         # MATLAB path: column-wise mean over permuted pool rows for this group
         sim_avg = np.asarray(boot_data)[np.asarray(boot_idx), :].mean(axis=0)
     else:
         # Fallback: standard nonparametric bootstrap of the mean
         if rng is None:
             rng = np.random.default_rng()
-        idx = rng.integers(0, x.size, size=(n_boot, x.size))
+        idx = rng.choice(
+            x.size,
+            size=(n_boot, x.size),
+            replace=True,
+            p=sample_probabilities,
+        )
         sim_avg = x[idx].mean(axis=1)
 
     left_pval  = float(np.sum(sim_avg <= observed_mean) / sim_avg.size)
@@ -756,6 +811,7 @@ def _resolve_distribution_axes(ax, height_ratios=(1, 4), hspace=0.35, figsize=(6
 def plot_distribution(
     data,
     *,
+    weights=None,
     label=None,
     color=None,
     ax=None,
@@ -772,6 +828,7 @@ def plot_distribution(
     height_ratios=(1, 3),
     hspace=0.35,
     show_legend=False,
+    show_pvalue=True,
     title=None,
 ):
     """
@@ -799,6 +856,12 @@ def plot_distribution(
     ----------
     data : array-like
         1D data for one condition.
+    weights : array-like or None
+        Optional nonnegative observation weights. They are always used for the
+        ECDF. In fallback mode they are also used for the observed mean and
+        bootstrap sampling. With a shared ``boot_data`` / ``boot_idx`` null,
+        the top panel instead uses unweighted hotspot means so the observed and
+        permuted statistics match; the lower ECDF remains weighted.
     label : str, optional
         Condition label.
     color : matplotlib color, optional
@@ -839,6 +902,8 @@ def plot_distribution(
         Vertical spacing between top and bottom panels.
     show_legend : bool
         Whether to show the legend on the bottom panel.
+    show_pvalue : bool
+        Whether to annotate the observed mean with its p-value stars.
     title : str or None
         If set, applied as the upper panel title.
 
@@ -875,6 +940,7 @@ def plot_distribution(
 
         plot_distribution._state_by_target[target_key] = {
             "datasets": [],
+            "weights": [],
             "labels": [],
             "colors": [],
             "boot_data_list": [],
@@ -889,8 +955,22 @@ def plot_distribution(
     ax_top = state["ax_top"]
     ax_bottom = state["ax_bottom"]
 
+    if (boot_data is None) != (boot_idx is None):
+        raise ValueError("boot_data and boot_idx must be provided together.")
+
     x = np.asarray(data, dtype=float).ravel()
-    x = x[np.isfinite(x)]
+    if weights is None:
+        valid = np.isfinite(x)
+        clean_weights = None
+    else:
+        weights = np.asarray(weights, dtype=float).ravel()
+        if weights.shape != x.shape:
+            raise ValueError("weights must have the same shape as data.")
+        valid = np.isfinite(x) & np.isfinite(weights) & (weights >= 0)
+        clean_weights = weights[valid]
+        if clean_weights.sum() <= 0:
+            raise ValueError("weights must contain at least one positive value.")
+    x = x[valid]
     if x.size == 0:
         raise ValueError("Input data contains no finite values.")
 
@@ -901,6 +981,7 @@ def plot_distribution(
         color = plt.get_cmap("tab10")(group_idx % 10)
 
     state["datasets"].append(x)
+    state["weights"].append(clean_weights)
     state["labels"].append(label)
     state["colors"].append(color)
     state["boot_data_list"].append(boot_data)
@@ -914,9 +995,22 @@ def plot_distribution(
     all_null_means = []
     all_raw = []
 
-    for i, (group_data, group_label, group_color, g_boot_data, g_boot_idx) in enumerate(
-        zip(state["datasets"], state["labels"], state["colors"],
-            state["boot_data_list"], state["boot_idx_list"])
+    for i, (
+        group_data,
+        group_weights,
+        group_label,
+        group_color,
+        g_boot_data,
+        g_boot_idx,
+    ) in enumerate(
+        zip(
+            state["datasets"],
+            state["weights"],
+            state["labels"],
+            state["colors"],
+            state["boot_data_list"],
+            state["boot_idx_list"],
+        )
     ):
         rng = np.random.default_rng(random_state + i)
         observed_mean, null_means, p_value = _bootstrap_null_mean(
@@ -925,9 +1019,11 @@ def plot_distribution(
             rng=rng,
             boot_data=g_boot_data,
             boot_idx=g_boot_idx,
+            weights=group_weights,
         )
         summaries.append({
             "data": group_data,
+            "weights": group_weights,
             "label": group_label,
             "color": group_color,
             "observed_mean": observed_mean,
@@ -964,18 +1060,19 @@ def plot_distribution(
             linewidth=2.5,
         )
 
-    ymax = ax_top.get_ylim()[1]
-    for s in summaries:
-        ax_top.text(
-            s["observed_mean"],
-            ymax * 0.97,
-            _p_to_stars(s["p_value"]),
-            ha="center",
-            va="top",
-            rotation=90,
-            fontsize=11,
-            color=s["color"],
-        )
+    if show_pvalue:
+        ymax = ax_top.get_ylim()[1]
+        for s in summaries:
+            ax_top.text(
+                s["observed_mean"],
+                ymax * 0.97,
+                _p_to_stars(s["p_value"]),
+                ha="center",
+                va="top",
+                rotation=90,
+                fontsize=11,
+                color=s["color"],
+            )
 
     ax_top.set_xlim(xmin - pad, xmax + pad)
     ax_top.set_xlabel(top_xlabel)
@@ -995,7 +1092,7 @@ def plot_distribution(
     raw_pad = 0.05 * raw_span
 
     for s in summaries:
-        ecdf_x, ecdf_y = _ecdf(s["data"])
+        ecdf_x, ecdf_y = _ecdf(s["data"], weights=s["weights"])
         ax_bottom.step(
             ecdf_x,
             ecdf_y,
