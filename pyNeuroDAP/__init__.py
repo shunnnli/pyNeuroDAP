@@ -102,6 +102,7 @@ from .gui import (
 
 from .mat import (
     load_mat,
+    load_analysis_stage_response,
     load_timeseries_mat,
     convert_params_from_mat,
     convert_spikes_from_mat,
@@ -183,6 +184,7 @@ __all__ = [
     
     # MATLAB file utilities
     'load_mat',
+    'load_analysis_stage_response',
     'load_timeseries_mat',
     'convert_params_from_mat',
     'convert_spikes_from_mat',
