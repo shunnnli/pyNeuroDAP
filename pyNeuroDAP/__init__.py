@@ -119,6 +119,15 @@ from .slice import (
     analyze_dmd_search_pair,
 )
 
+from .minis import (
+    MiniDetectionConfig,
+    MiniDetectionResult,
+    bandpass_filter as filter_mini_trace,
+    detect_minis,
+    find_monotonic_decay_starts,
+    find_peaks_near_decay,
+)
+
 # Define what gets imported with "from pyNeuroDAP import *"
 __all__ = [
     # Core spike analysis
@@ -198,6 +207,14 @@ __all__ = [
     'get_spot_response',
     'analyze_dmd_search',
     'analyze_dmd_search_pair',
+
+    # Miniature postsynaptic-current detection
+    'MiniDetectionConfig',
+    'MiniDetectionResult',
+    'filter_mini_trace',
+    'detect_minis',
+    'find_monotonic_decay_starts',
+    'find_peaks_near_decay',
 ]
 
 if _SSM_AVAILABLE:
