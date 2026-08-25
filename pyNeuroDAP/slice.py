@@ -139,6 +139,303 @@ def _find_ref_groups_by_signature(f: h5py.File) -> dict:
     return cats
 
 
+_SPOTS_FILE_RE = re.compile(
+    r"^spots_cell(?P<cell>\d+)_epoch(?P<epoch>\d+)"
+    r"(?:_(?P<suffix>.+))?_depth(?P<depth>\d+)\.mat$"
+)
+
+
+def _parse_spots_filename(name: str) -> Optional[dict]:
+    """
+    Parse a ``spots_*.mat`` filename into its cell/search/depth parts.
+
+    Handles both the plain per-depth files (``spots_cell4_epoch8_depth1.mat``)
+    and the hotspot re-recordings that carry a search suffix
+    (``spots_cell4_epoch8_hotspot_maxSearchDepth_m35_depth5.mat``).
+
+    ``search_name`` is the filename with the ``_depthK`` part removed, which is
+    exactly the string stored in the table's ``Epochs`` column.
+    """
+    match = _SPOTS_FILE_RE.match(name)
+    if match is None:
+        return None
+    suffix = match.group("suffix")
+    cell = int(match.group("cell"))
+    epoch = int(match.group("epoch"))
+    search_name = f"spots_cell{cell}_epoch{epoch}"
+    if suffix:
+        search_name = f"{search_name}_{suffix}"
+    return {
+        "cell": cell,
+        "epoch": epoch,
+        "suffix": suffix,
+        "search_name": search_name,
+        "depth": int(match.group("depth")),
+    }
+
+
+def _final_depths_from_response_map(response_map: dict) -> Optional[list]:
+    """Return each search's final (deepest) depth from a Response map struct."""
+    if not isinstance(response_map, dict):
+        return None
+    depths = response_map.get("depths")
+    if isinstance(depths, np.ndarray):
+        per_search = list(depths.ravel())
+    elif isinstance(depths, (list, tuple)):
+        per_search = list(depths)
+    elif depths is None:
+        return None
+    else:
+        per_search = [depths]
+
+    finals = []
+    for entry in per_search:
+        values = np.asarray(entry, dtype=float).ravel()
+        values = values[np.isfinite(values)]
+        finals.append(int(values[-1]) if values.size else None)
+    return finals
+
+
+def _search_depths_from_filenames(results_dir: Path) -> dict:
+    """
+    Read each cell's true final depth per search from the raw ``spots_*.mat``
+    filenames on disk.
+
+    Returns ``{cell_number: {search_name: deepest_depth}}``.  This is pure
+    filename parsing -- no HDF5 file is opened -- so it is cheap enough to run
+    on every load as a consistency check.
+    """
+    depths_by_cell: dict = {}
+    if not results_dir.is_dir():
+        return depths_by_cell
+    for entry in sorted(results_dir.iterdir()):
+        if not (entry.is_dir() and re.match(r"cell\d+$", entry.name)):
+            continue
+        for mat_file in entry.glob("spots_*.mat"):
+            parsed = _parse_spots_filename(mat_file.name)
+            if parsed is None:
+                continue
+            per_search = depths_by_cell.setdefault(parsed["cell"], {})
+            name = parsed["search_name"]
+            per_search[name] = max(per_search.get(name, 0), parsed["depth"])
+    return depths_by_cell
+
+
+_DEPTH_CHOICE_RE = re.compile(
+    r"^DEPTH_CHOICE-(?P<choice>MAX|SHALLOW|BOTH|NONE)(\..*)?$", re.IGNORECASE
+)
+DEPTH_CHOICES = ("max", "shallow", "both", "none")
+DEFAULT_DEPTH_CHOICE = "max"
+
+
+def _read_cell_depth_choice(cell_dir: Path) -> str:
+    """
+    Read a cell's manual depth-selection choice from a marker file it contains.
+
+    Drop an empty file named ``DEPTH_CHOICE-MAX``, ``DEPTH_CHOICE-SHALLOW``,
+    ``DEPTH_CHOICE-BOTH``, or ``DEPTH_CHOICE-NONE`` inside ``cellN/`` to
+    control which ``-35mV`` hotspot search that cell uses: only
+    ``hotspot_maxSearchDepth_m35``, only the shallower ``hotspot_m35``, both,
+    or neither (excludes the cell from analysis entirely).  No marker file
+    means ``DEFAULT_DEPTH_CHOICE`` (``"max"``, today's behavior).  The choice
+    lives entirely in the cell's own folder and can be changed by renaming
+    the file in Finder -- nothing needs to be edited or moved.
+    """
+    if not cell_dir.is_dir():
+        return DEFAULT_DEPTH_CHOICE
+    matches = []
+    for entry in sorted(cell_dir.iterdir()):
+        if entry.is_file():
+            match = _DEPTH_CHOICE_RE.match(entry.name)
+            if match:
+                matches.append(match.group("choice").lower())
+    if not matches:
+        return DEFAULT_DEPTH_CHOICE
+    if len(set(matches)) > 1:
+        warnings.warn(
+            f"{cell_dir} has more than one DEPTH_CHOICE-* marker file "
+            f"({matches}); using '{matches[0]}'. Remove the extra marker.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return matches[0]
+
+
+def _read_depth_choices(results_dir: Path) -> dict:
+    """Return ``{cell_number: depth_choice}`` for every ``cellN/`` subfolder."""
+    choices: dict = {}
+    if not results_dir.is_dir():
+        return choices
+    for entry in sorted(results_dir.iterdir()):
+        if entry.is_dir() and re.match(r"cell\d+$", entry.name):
+            cell_number = int(re.search(r"(\d+)", entry.name).group(1))
+            choices[cell_number] = _read_cell_depth_choice(entry)
+    return choices
+
+
+def _warn_on_depth_mismatch(df: pd.DataFrame, results_dir: Path) -> None:
+    """
+    Cross-check each row's Response map against the raw files on disk.
+
+    A cell whose stored per-search depths disagree with the depths recorded in
+    its own ``spots_*.mat`` filenames has been paired with another cell's data.
+    """
+    try:
+        disk_depths = _search_depths_from_filenames(results_dir)
+    except OSError:
+        return
+    if not disk_depths:
+        return
+
+    mismatches = []
+    for _, row in df.iterrows():
+        cell = row.get("Cell")
+        epochs = row.get("Epochs")
+        if cell is None or not isinstance(epochs, list):
+            continue
+        expected = disk_depths.get(int(cell))
+        if not expected:
+            continue
+        finals = _final_depths_from_response_map(row.get("Response map"))
+        if finals is None or len(finals) != len(epochs):
+            continue
+        for search_name, stored in zip(epochs, finals):
+            on_disk = expected.get(search_name)
+            if on_disk is not None and stored is not None and on_disk != stored:
+                mismatches.append(
+                    f"cell {int(cell)} search '{search_name}': "
+                    f"table depth {stored} != on-disk depth {on_disk}"
+                )
+
+    if mismatches:
+        warnings.warn(
+            "Response map data does not match the raw files on disk, so cells "
+            "may be paired with the wrong data:\n  "
+            + "\n  ".join(mismatches),
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+
+def _read_mcos_column_data(f: h5py.File, col_names: Sequence[str]) -> Optional[dict]:
+    """
+    Read the table's column data from ``#subsystem#/MCOS`` in true row order.
+
+    MATLAB v7.3 stores a table's variables as an ``n_columns``-element cell
+    array in the MCOS metadata, where element *i* holds the data for
+    ``col_names[i]``: a numeric row vector for numeric variables, or an
+    ``n_rows``-element array of references for cell variables.
+
+    Reading that array recovers the exact row-to-data pairing MATLAB recorded,
+    so no heuristic matching is needed.  Returns ``None`` when the metadata
+    cannot be located or fails validation, so callers can fall back.
+    """
+    n_cols = len(col_names)
+    if n_cols == 0 or "Cell" not in col_names:
+        return None
+    subsystem = f.get("#subsystem#")
+    if subsystem is None or "MCOS" not in subsystem:
+        return None
+    cell_pos = list(col_names).index("Cell")
+
+    for ref in np.asarray(f["#subsystem#"]["MCOS"][()]).ravel():
+        try:
+            candidate = f[ref]
+        except Exception:
+            continue
+        if not isinstance(candidate, h5py.Dataset):
+            continue
+        data = candidate[()]
+        if data.dtype != object or data.size != n_cols:
+            continue
+        entries = data.ravel()
+
+        # The 'Cell' variable is numeric, which distinguishes the data array
+        # from the sibling array holding the variable-name strings.
+        try:
+            cell_values = f[entries[cell_pos]][()]
+        except Exception:
+            continue
+        if not isinstance(cell_values, np.ndarray) or cell_values.dtype.kind != "f":
+            continue
+        cell_values = cell_values.ravel()
+        n_rows = cell_values.size
+        if n_rows == 0 or not np.all(np.isfinite(cell_values)):
+            continue
+
+        # Variables stored as opaque MCOS handles (Session/Animal/Task) do not
+        # have one element per row; skip them rather than misreading them.
+        columns: dict = {}
+        for pos, name in enumerate(col_names):
+            try:
+                column = f[entries[pos]][()]
+            except Exception:
+                continue
+            if not isinstance(column, np.ndarray) or column.size != n_rows:
+                continue
+            flat = column.ravel()
+            if column.dtype == object:
+                columns[name] = [f[item] for item in flat]
+            else:
+                columns[name] = list(flat)
+
+        # Require most variables to agree on the row count before trusting it.
+        if len(columns) * 2 < n_cols:
+            continue
+        return {"n_rows": n_rows, "columns": columns}
+
+    return None
+
+
+def _cells_df_from_mcos(
+    f: h5py.File, col_names: Sequence[str], table: dict
+) -> pd.DataFrame:
+    """Build the cells DataFrame from an exact MCOS column read."""
+    columns = table["columns"]
+    rows = []
+    for row_idx in range(table["n_rows"]):
+        row: dict = {col: None for col in col_names}
+        for name, values in columns.items():
+            item = values[row_idx]
+            row[name] = (
+                _h5_read_item(f, item)
+                if isinstance(item, (h5py.Dataset, h5py.Group))
+                else item
+            )
+
+        if row.get("Cell") is not None:
+            row["Cell"] = int(row["Cell"])
+
+        epochs = row.get("Epochs")
+        if isinstance(epochs, str):
+            row["Epochs"] = [epochs]
+        elif isinstance(epochs, (list, tuple, np.ndarray)):
+            row["Epochs"] = [str(name) for name in np.asarray(epochs).ravel()]
+        else:
+            row["Epochs"] = []
+
+        vhold = row.get("Vhold")
+        if isinstance(vhold, np.ndarray):
+            row["Vhold"] = vhold.ravel().tolist()
+        elif np.isscalar(vhold) and vhold is not None:
+            row["Vhold"] = [float(vhold)]
+
+        opts = row.get("Options")
+        if isinstance(opts, dict):
+            cell_loc = opts.get("cellLocation")
+            if cell_loc is not None:
+                row["_cellLocation"] = (
+                    cell_loc.tolist()
+                    if isinstance(cell_loc, np.ndarray)
+                    else cell_loc
+                )
+
+        rows.append(row)
+
+    rows.sort(key=lambda item: (item.get("Cell") is None, item.get("Cell")))
+    return pd.DataFrame(rows)
+
+
 # ---------------------------------------------------------------------------
 # 1) Load Results folder MATs -> pandas
 # ---------------------------------------------------------------------------
@@ -150,6 +447,15 @@ def load_cells_table(cells_mat_path: Union[str, Path]) -> pd.DataFrame:
     Each row corresponds to one recorded cell.  Nested structs (Options, Stats,
     Response map, Difference map) are kept as Python dicts in their columns.
 
+    The table's true row order is read from the MATLAB ``#subsystem#/MCOS``
+    metadata, which pairs every cell with its own data exactly.  Files whose
+    metadata cannot be read fall back to matching cells to data by search
+    count, which cannot separate cells that ran the same number of searches.
+
+    Also adds a ``"Depth choice"`` column read from each ``cellN/`` subfolder
+    (see :func:`_read_cell_depth_choice`); ``"max"`` when no override marker
+    file is present.
+
     Parameters
     ----------
     cells_mat_path : str or Path
@@ -158,7 +464,8 @@ def load_cells_table(cells_mat_path: Union[str, Path]) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        One row per cell with columns matching the MATLAB table columns.
+        One row per cell with columns matching the MATLAB table columns, plus
+        ``"Depth choice"``.
     """
     cells_mat_path = str(cells_mat_path)
 
@@ -169,140 +476,174 @@ def load_cells_table(cells_mat_path: Union[str, Path]) -> pd.DataFrame:
                 f"Could not extract table column names from {cells_mat_path}"
             )
 
-        cats = _find_ref_groups_by_signature(f)
-
-        # Read structured groups (keep raw h5py items to count searches)
-        rmap_items = cats.get("response_map", [])
-        stats_items = cats.get("stats", [])
-        options_items = cats.get("options", [])
-        diff_items = cats.get("difference_map", [])
-        protocol_items = cats.get("protocol", [])
-
-        response_maps = [_h5_read_group(f, item) for _, item in rmap_items]
-        stats_list = [_h5_read_group(f, item) for _, item in stats_items]
-        options_list = [_h5_read_group(f, item) for _, item in options_items]
-        diff_maps = [_h5_read_group(f, item) for _, item in diff_items]
-        protocol_list = [_h5_read_group(f, item) for _, item in protocol_items]
-
-        # Count searches per response map from raw HDF5 (before squeeze)
-        rmap_n_searches = []
-        for _, item in rmap_items:
-            depths_ds = item["depths"]
-            data = depths_ds[()]
-            if data.dtype == object:
-                rmap_n_searches.append(data.size)
-            else:
-                rmap_n_searches.append(1)
-
-        # Find epoch name strings: short uint16 datasets matching 'spots_cell*'
-        refs = f["#refs#"]
-        epoch_strings: dict[str, str] = {}
-        for k in sorted(refs.keys()):
-            item = refs[k]
-            if isinstance(item, h5py.Dataset):
-                data = item[()]
-                if data.dtype == np.uint16 and 5 < data.size < 200:
-                    s = "".join(chr(c) for c in data.flatten() if 0 < c < 65536)
-                    if s.startswith("spots_cell"):
-                        epoch_strings[k] = s
-
-        # Infer cell numbers and group epochs per cell
-        epoch_list = sorted(epoch_strings.values())
-        cell_nums = sorted(
-            set(
-                int(re.search(r"cell(\d+)", e).group(1))
-                for e in epoch_list
-                if re.search(r"cell(\d+)", e)
-            )
-        )
-        nrows = len(cell_nums) if cell_nums else len(response_maps)
-        epochs_per_cell = {}
-        for cn in cell_nums:
-            epochs_per_cell[cn] = sorted(
-                e for e in epoch_list if f"cell{cn}_" in e
-            )
-
-        # Match response maps to cells by epoch count
-        rmap_assignment = _match_by_count(
-            rmap_n_searches, [len(epochs_per_cell.get(cn, [])) for cn in cell_nums]
-        )
-
-        # Assemble rows
-        rows = []
-        used_stats = set()
-        used_opts = set()
-        used_diff = set()
-
-        for ci, cn in enumerate(cell_nums):
-            row: dict = {col: None for col in col_names}
-            row["Cell"] = cn
-            row["Epochs"] = epochs_per_cell.get(cn, [])
-
-            ri = rmap_assignment[ci] if ci < len(rmap_assignment) else ci
-            if ri < len(response_maps):
-                row["Response map"] = response_maps[ri]
-
-            # Assign Stats/Options by index (same order as cells)
-            if ci < len(stats_list):
-                row["Stats"] = stats_list[ci]
-            if ci < len(options_list):
-                row["Options"] = options_list[ci]
-            if ci < len(diff_maps):
-                row["Difference map"] = diff_maps[ci]
-
-            opts = row.get("Options")
-            if isinstance(opts, dict):
-                cell_loc = opts.get("cellLocation")
-                if cell_loc is not None:
-                    row["_cellLocation"] = (
-                        cell_loc.tolist()
-                        if isinstance(cell_loc, np.ndarray)
-                        else cell_loc
-                    )
-
-            rows.append(row)
-
-        df = pd.DataFrame(rows)
-
-        # Read per-search Vhold values directly from the MATLAB table's #refs#.
-        # The MATLAB code stores cells{c,'Vhold'} = {cellVhold} where cellVhold
-        # is a float64 column vector (one value per search). We scan #refs# for
-        # an n_cells-sized object array whose elements are float64 vectors in the
-        # plausible holding-potential range (-400 … +200 mV).
-        expected_search_counts = [
-            len(epochs) if isinstance(epochs, list) else 0
-            for epochs in df["Epochs"]
-        ]
-        vhold_by_cell = _read_vhold_from_refs(
-            f,
-            len(df),
-            expected_search_counts=expected_search_counts,
-        )
-        if vhold_by_cell is not None:
-            for df_idx, vh_vec in enumerate(vhold_by_cell):
-                if df_idx < len(df):
-                    df.at[df_idx, "Vhold"] = vh_vec.tolist()
+        table = _read_mcos_column_data(f, col_names)
+        if table is not None:
+            df = _cells_df_from_mcos(f, col_names, table)
         else:
-            # Fallback: infer sign-only Vhold from trace data
-            for idx, row in df.iterrows():
-                rmap = row.get("Response map")
-                if isinstance(rmap, dict):
-                    cmap = rmap.get("currentMap")
-                    if isinstance(cmap, (list, np.ndarray)):
-                        vholds = _infer_vhold_from_currentmap(cmap)
-                        if vholds is not None:
-                            df.at[idx, "Vhold"] = vholds
+            warnings.warn(
+                f"Could not read table row order from {cells_mat_path}; falling "
+                "back to matching cells to data by search count. Cells that ran "
+                "the same number of searches may be paired with the wrong data.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            df = _load_cells_table_by_count(f, col_names)
 
-        # Extract protocol info
-        if protocol_list:
-            proto_pool = list(protocol_list)
-            for idx, row in df.iterrows():
-                epochs = row.get("Epochs")
-                if epochs and len(proto_pool) > 0:
-                    n_search = len(epochs) if isinstance(epochs, list) else 1
-                    protos = proto_pool[:n_search]
-                    proto_pool = proto_pool[n_search:]
-                    df.at[idx, "Protocol"] = protos
+    results_dir = Path(cells_mat_path).parent
+    _warn_on_depth_mismatch(df, results_dir)
+
+    depth_choices = _read_depth_choices(results_dir)
+    df["Depth choice"] = [
+        depth_choices.get(int(cell), DEFAULT_DEPTH_CHOICE) if cell is not None else DEFAULT_DEPTH_CHOICE
+        for cell in df["Cell"]
+    ]
+    return df
+
+
+def _load_cells_table_by_count(
+    f: h5py.File, col_names: Sequence[str]
+) -> pd.DataFrame:
+    """
+    Legacy loader: pair cells with data by matching search counts.
+
+    Only used when the exact MCOS row order is unavailable.  Cells that ran the
+    same number of searches are indistinguishable here, so the pairing falls
+    back to ``#refs#`` storage order and may be wrong.
+    """
+    cats = _find_ref_groups_by_signature(f)
+
+    # Read structured groups (keep raw h5py items to count searches)
+    rmap_items = cats.get("response_map", [])
+    stats_items = cats.get("stats", [])
+    options_items = cats.get("options", [])
+    diff_items = cats.get("difference_map", [])
+    protocol_items = cats.get("protocol", [])
+
+    response_maps = [_h5_read_group(f, item) for _, item in rmap_items]
+    stats_list = [_h5_read_group(f, item) for _, item in stats_items]
+    options_list = [_h5_read_group(f, item) for _, item in options_items]
+    diff_maps = [_h5_read_group(f, item) for _, item in diff_items]
+    protocol_list = [_h5_read_group(f, item) for _, item in protocol_items]
+
+    # Count searches per response map from raw HDF5 (before squeeze)
+    rmap_n_searches = []
+    for _, item in rmap_items:
+        depths_ds = item["depths"]
+        data = depths_ds[()]
+        if data.dtype == object:
+            rmap_n_searches.append(data.size)
+        else:
+            rmap_n_searches.append(1)
+
+    # Find epoch name strings: short uint16 datasets matching 'spots_cell*'
+    refs = f["#refs#"]
+    epoch_strings: dict[str, str] = {}
+    for k in sorted(refs.keys()):
+        item = refs[k]
+        if isinstance(item, h5py.Dataset):
+            data = item[()]
+            if data.dtype == np.uint16 and 5 < data.size < 200:
+                s = "".join(chr(c) for c in data.flatten() if 0 < c < 65536)
+                if s.startswith("spots_cell"):
+                    epoch_strings[k] = s
+
+    # Infer cell numbers and group epochs per cell
+    epoch_list = sorted(epoch_strings.values())
+    cell_nums = sorted(
+        set(
+            int(re.search(r"cell(\d+)", e).group(1))
+            for e in epoch_list
+            if re.search(r"cell(\d+)", e)
+        )
+    )
+    nrows = len(cell_nums) if cell_nums else len(response_maps)
+    epochs_per_cell = {}
+    for cn in cell_nums:
+        epochs_per_cell[cn] = sorted(
+            e for e in epoch_list if f"cell{cn}_" in e
+        )
+
+    # Match response maps to cells by epoch count
+    rmap_assignment = _match_by_count(
+        rmap_n_searches, [len(epochs_per_cell.get(cn, [])) for cn in cell_nums]
+    )
+
+    # Assemble rows
+    rows = []
+    used_stats = set()
+    used_opts = set()
+    used_diff = set()
+
+    for ci, cn in enumerate(cell_nums):
+        row: dict = {col: None for col in col_names}
+        row["Cell"] = cn
+        row["Epochs"] = epochs_per_cell.get(cn, [])
+
+        ri = rmap_assignment[ci] if ci < len(rmap_assignment) else ci
+        if ri < len(response_maps):
+            row["Response map"] = response_maps[ri]
+
+        # Assign Stats/Options by index (same order as cells)
+        if ci < len(stats_list):
+            row["Stats"] = stats_list[ci]
+        if ci < len(options_list):
+            row["Options"] = options_list[ci]
+        if ci < len(diff_maps):
+            row["Difference map"] = diff_maps[ci]
+
+        opts = row.get("Options")
+        if isinstance(opts, dict):
+            cell_loc = opts.get("cellLocation")
+            if cell_loc is not None:
+                row["_cellLocation"] = (
+                    cell_loc.tolist()
+                    if isinstance(cell_loc, np.ndarray)
+                    else cell_loc
+                )
+
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+
+    # Read per-search Vhold values directly from the MATLAB table's #refs#.
+    # The MATLAB code stores cells{c,'Vhold'} = {cellVhold} where cellVhold
+    # is a float64 column vector (one value per search). We scan #refs# for
+    # an n_cells-sized object array whose elements are float64 vectors in the
+    # plausible holding-potential range (-400 … +200 mV).
+    expected_search_counts = [
+        len(epochs) if isinstance(epochs, list) else 0
+        for epochs in df["Epochs"]
+    ]
+    vhold_by_cell = _read_vhold_from_refs(
+        f,
+        len(df),
+        expected_search_counts=expected_search_counts,
+    )
+    if vhold_by_cell is not None:
+        for df_idx, vh_vec in enumerate(vhold_by_cell):
+            if df_idx < len(df):
+                df.at[df_idx, "Vhold"] = vh_vec.tolist()
+    else:
+        # Fallback: infer sign-only Vhold from trace data
+        for idx, row in df.iterrows():
+            rmap = row.get("Response map")
+            if isinstance(rmap, dict):
+                cmap = rmap.get("currentMap")
+                if isinstance(cmap, (list, np.ndarray)):
+                    vholds = _infer_vhold_from_currentmap(cmap)
+                    if vholds is not None:
+                        df.at[idx, "Vhold"] = vholds
+
+    # Extract protocol info
+    if protocol_list:
+        proto_pool = list(protocol_list)
+        for idx, row in df.iterrows():
+            epochs = row.get("Epochs")
+            if epochs and len(proto_pool) > 0:
+                n_search = len(epochs) if isinstance(epochs, list) else 1
+                protos = proto_pool[:n_search]
+                proto_pool = proto_pool[n_search:]
+                df.at[idx, "Protocol"] = protos
 
     return df
 
@@ -511,7 +852,9 @@ def index_results_folder(results_dir: Union[str, Path]) -> dict:
     dict
         ``cells_mat_path``: path to ``cells_DMD_*.mat``
         ``cell_dirs``: dict mapping cell number to its subfolder path
-        ``spots_files``: list of dicts with keys ``path``, ``cell``, ``epoch``, ``depth``
+        ``spots_files``: list of dicts with keys ``path``, ``cell``, ``epoch``,
+        ``suffix``, ``search_name``, and ``depth``.  ``search_name`` matches the
+        corresponding entry in the cells table's ``Epochs`` column.
     """
     results_dir = Path(results_dir)
     index: dict = {"cells_mat_path": None, "cell_dirs": {}, "spots_files": []}
@@ -527,19 +870,14 @@ def index_results_folder(results_dir: Union[str, Path]) -> dict:
             cell_num = int(re.search(r"(\d+)", d.name).group(1))
             index["cell_dirs"][cell_num] = str(d)
 
-            # Find spots_*.mat files
+            # Find spots_*.mat files, including the hotspot re-recordings
+            # (``..._hotspot_maxSearchDepth_m35_depth5.mat``) whose names carry
+            # a search suffix between the epoch and the depth.
             for mat_file in sorted(d.glob("spots_*.mat")):
-                m = re.match(
-                    r"spots_cell(\d+)_epoch(\d+)_depth(\d+)\.mat", mat_file.name
-                )
-                if m:
+                parsed = _parse_spots_filename(mat_file.name)
+                if parsed:
                     index["spots_files"].append(
-                        {
-                            "path": str(mat_file),
-                            "cell": int(m.group(1)),
-                            "epoch": int(m.group(2)),
-                            "depth": int(m.group(3)),
-                        }
+                        {"path": str(mat_file), **parsed}
                     )
 
     return index
