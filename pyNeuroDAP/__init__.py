@@ -120,10 +120,15 @@ from .slice import (
 )
 
 from .minis import (
+    ConcatenatedMiniDetectionResult,
+    ConcatenatedSegments,
     MiniDetectionConfig,
     MiniDetectionResult,
     bandpass_filter as filter_mini_trace,
+    concatenate_filtered_segments,
     detect_minis,
+    detect_minis_concatenated,
+    detect_minis_in_concatenated_trace,
     find_monotonic_decay_starts,
     find_peaks_near_decay,
 )
@@ -211,8 +216,13 @@ __all__ = [
     # Miniature postsynaptic-current detection
     'MiniDetectionConfig',
     'MiniDetectionResult',
+    'ConcatenatedMiniDetectionResult',
+    'ConcatenatedSegments',
     'filter_mini_trace',
+    'concatenate_filtered_segments',
     'detect_minis',
+    'detect_minis_concatenated',
+    'detect_minis_in_concatenated_trace',
     'find_monotonic_decay_starts',
     'find_peaks_near_decay',
 ]

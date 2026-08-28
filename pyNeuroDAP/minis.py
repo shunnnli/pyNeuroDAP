@@ -15,7 +15,6 @@ from typing import Iterable, Sequence
 import numpy as np
 import pandas as pd
 from scipy import signal
-from scipy.ndimage import median_filter
 
 
 EVENT_COLUMNS = [
@@ -96,8 +95,56 @@ class MiniDetectionResult:
     thresholds: pd.DataFrame
 
 
+@dataclass(frozen=True)
+class ConcatenatedMiniDetectionResult(MiniDetectionResult):
+    """Result of `detect_minis_concatenated`; adds each seam's sample index."""
+
+    boundary_samples: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class ConcatenatedSegments:
+    """Independently filtered segments stitched into one trace.
+
+    Built by `concatenate_filtered_segments` and consumed by
+    `detect_minis_in_concatenated_trace`. `boundary_samples` marks where one
+    original segment ends and the next begins in `trace` -- the two
+    neighboring segments were not necessarily contiguous in time, so a
+    detection landing on one of these indices is a probable artifact.
+    """
+
+    trace: np.ndarray
+    boundary_samples: tuple[int, ...]
+
+
 def _milliseconds_to_samples(milliseconds: float, sample_rate_hz: float) -> int:
     return max(1, int(round(milliseconds * sample_rate_hz / 1000.0)))
+
+
+def _running_median(trace: np.ndarray, size: int) -> np.ndarray:
+    """Centered running median, replacing ``scipy.ndimage.median_filter``.
+
+    That function cannot be used here: on scipy 1.15 it is not
+    deterministic, returning different results for repeated calls on
+    identical finite input (observed on roughly 1% of 2000-sample traces),
+    and when ``size`` exceeds the input length it reads out of bounds,
+    yielding uninitialized denormals or segfaulting. Either failure would
+    silently corrupt the noise threshold derived from this baseline.
+
+    The window is clamped to the trace length and forced odd so it can be
+    centered, and edges use symmetric padding -- which is what scipy's
+    ``mode="reflect"`` means. For an odd ``size`` within the trace length
+    this reproduces ``median_filter`` exactly.
+    """
+    size = max(1, min(int(size), len(trace)))
+    if size % 2 == 0:
+        size = max(1, size - 1)
+    pad = size // 2
+    padded = np.pad(trace, pad, mode="symmetric")
+    rolled = (
+        pd.Series(padded).rolling(size, center=True, min_periods=1).median()
+    )
+    return rolled.to_numpy()[pad : pad + len(trace)]
 
 
 def _interpolate_nonfinite(values: np.ndarray) -> np.ndarray:
@@ -148,6 +195,19 @@ def find_monotonic_decay_starts(
 
     Positive events must decay downward; negative events must recover upward.
     This is the ``decay_window`` rule from the referenced implementation.
+
+    The monotonicity test is evaluated for every candidate start at once
+    using whole-array comparisons, rather than re-slicing and calling
+    ``np.diff`` once per sample. Only the greedy non-overlap selection is
+    inherently sequential, and it now iterates over matching starts instead
+    of over every sample. Output is identical to the per-window loop; this
+    matters because a pooled RC-recovery baseline can run for minutes, where
+    the per-sample version cost seconds per cell per polarity.
+
+    Note the original's separate "extrema at the ends" test is subsumed
+    here: a strictly monotonic window necessarily has its minimum and
+    maximum at opposite ends, and the original only evaluated that test when
+    strict monotonicity already held.
     """
     trace = np.asarray(values, dtype=float).reshape(-1)
     if window_samples < 2 or step_samples < 1:
@@ -155,29 +215,33 @@ def find_monotonic_decay_starts(
     if polarity not in {"negative", "positive"}:
         raise ValueError("polarity must be 'negative' or 'positive'")
 
+    # Offsets of the sub-sampled points within a window, i.e. the indices
+    # that ``trace[i : i + window_samples : step_samples]`` would select.
+    offsets = np.arange(0, window_samples, step_samples)
+    n_candidates = len(trace) - window_samples + 1
+    if n_candidates < 1 or len(offsets) < 2:
+        return np.zeros(0, dtype=int)
+
+    # is_monotonic[i] is True when the window starting at sample i is
+    # strictly monotonic in the required direction.
+    is_monotonic = np.ones(n_candidates, dtype=bool)
+    for lower, upper in zip(offsets[:-1], offsets[1:]):
+        difference = (
+            trace[upper : upper + n_candidates]
+            - trace[lower : lower + n_candidates]
+        )
+        is_monotonic &= (
+            difference < 0 if polarity == "positive" else difference > 0
+        )
+
+    # Greedy non-overlapping selection: take the earliest remaining match,
+    # then skip a full window past it.
     starts = []
-    index = 0
-    while index <= len(trace) - window_samples:
-        sampled = trace[index : index + window_samples : step_samples]
-        if len(sampled) > 1:
-            differences = np.diff(sampled)
-            if polarity == "positive":
-                monotonic = np.all(differences < 0)
-                extrema_at_ends = (
-                    np.argmax(sampled) == 0
-                    and np.argmin(sampled) == len(sampled) - 1
-                )
-            else:
-                monotonic = np.all(differences > 0)
-                extrema_at_ends = (
-                    np.argmin(sampled) == 0
-                    and np.argmax(sampled) == len(sampled) - 1
-                )
-            if monotonic and extrema_at_ends:
-                starts.append(index)
-                index += window_samples
-                continue
-        index += 1
+    next_allowed = 0
+    for index in np.flatnonzero(is_monotonic).tolist():
+        if index >= next_allowed:
+            starts.append(index)
+            next_allowed = index + window_samples
     return np.asarray(starts, dtype=int)
 
 
@@ -238,7 +302,7 @@ def _detect_polarity(
     baseline_samples = _milliseconds_to_samples(
         config.baseline_window_ms, sample_rate_hz
     )
-    baseline = median_filter(filtered, size=baseline_samples, mode="reflect")
+    baseline = _running_median(filtered, baseline_samples)
     noise = filtered - baseline
     noise_center = float(np.median(noise))
     noise_std = float(np.std(noise))
@@ -309,3 +373,116 @@ def detect_minis(
         threshold_records, columns=THRESHOLD_COLUMNS
     )
     return MiniDetectionResult(events, tuple(filtered_segments), thresholds)
+
+
+def concatenate_filtered_segments(
+    segments: Iterable[Sequence[float]],
+    sample_rate_hz: float,
+    config: MiniDetectionConfig | None = None,
+) -> ConcatenatedSegments:
+    """Filter each segment independently, then stitch them into one trace.
+
+    Segments are assumed to come from the same cell but not necessarily be
+    contiguous in time (e.g. one baseline window per hotspot). Filtering
+    each piece *before* concatenation matters: this detector's 1 Hz low
+    cutoff has a settling time of several hundred ms, so filtering the
+    already-stitched trace in one pass would let every artificial jump
+    between segments ring for hundreds of ms on each side (verified against
+    a synthetic step: >500 ms of >1%-amplitude ringing on each side), far
+    outlasting a single short segment. Filtering first confines that
+    ringing to each segment's own filtfilt edge padding, so only a narrow
+    window around each seam needs to be discarded later (see
+    `detect_minis_in_concatenated_trace`).
+    """
+    config = config or MiniDetectionConfig()
+    config.validate(sample_rate_hz)
+
+    filtered_pieces = [
+        bandpass_filter(segment, sample_rate_hz, config) for segment in segments
+    ]
+    if not filtered_pieces:
+        raise ValueError("at least one segment is required")
+
+    boundary_samples = tuple(
+        int(b) for b in np.cumsum([len(piece) for piece in filtered_pieces])[:-1]
+    )
+    trace = np.concatenate(filtered_pieces)
+    return ConcatenatedSegments(trace, boundary_samples)
+
+
+def detect_minis_in_concatenated_trace(
+    concatenated: ConcatenatedSegments,
+    sample_rate_hz: float,
+    config: MiniDetectionConfig | None = None,
+    boundary_guard_ms: float = 5.0,
+) -> ConcatenatedMiniDetectionResult:
+    """Detect minis in an already-concatenated trace, guarding each seam.
+
+    `concatenated` comes from `concatenate_filtered_segments`. Any peak
+    within `boundary_guard_ms` of one of its `boundary_samples` is discarded
+    as a probable concatenation artifact rather than a real event.
+    """
+    config = config or MiniDetectionConfig()
+    config.validate(sample_rate_hz)
+
+    trace = concatenated.trace
+    guard_samples = _milliseconds_to_samples(boundary_guard_ms, sample_rate_hz)
+
+    def _near_boundary(sample_idx: int) -> bool:
+        return any(
+            abs(sample_idx - b) < guard_samples
+            for b in concatenated.boundary_samples
+        )
+
+    records = []
+    threshold_records = []
+    for polarity in ("negative", "positive"):
+        peaks, threshold = _detect_polarity(trace, sample_rate_hz, polarity, config)
+        threshold_records.append(
+            {"segment_idx": 0, "polarity": polarity, "noise_threshold_pa": threshold}
+        )
+        for peak in peaks:
+            if _near_boundary(int(peak)):
+                continue
+            records.append(
+                {
+                    "segment_idx": 0,
+                    "sample": int(peak),
+                    "polarity": polarity,
+                    "amplitude_pa": float(trace[peak]),
+                    "noise_threshold_pa": threshold,
+                }
+            )
+
+    events = pd.DataFrame.from_records(records, columns=EVENT_COLUMNS)
+    if not events.empty:
+        events = events.sort_values(["sample", "polarity"]).reset_index(drop=True)
+    thresholds = pd.DataFrame.from_records(
+        threshold_records, columns=THRESHOLD_COLUMNS
+    )
+    return ConcatenatedMiniDetectionResult(
+        events, (trace,), thresholds, concatenated.boundary_samples
+    )
+
+
+def detect_minis_concatenated(
+    segments: Iterable[Sequence[float]],
+    sample_rate_hz: float,
+    config: MiniDetectionConfig | None = None,
+    boundary_guard_ms: float = 5.0,
+) -> ConcatenatedMiniDetectionResult:
+    """Detect minis across originally-disjoint segments stitched together.
+
+    Use this instead of `detect_minis` when segments are individually too
+    short for a decay window (e.g. 30 ms baseline-control windows with the
+    60 ms default IPSC window) but come from the same cell, so pooling them
+    into one longer trace is desirable. This is a convenience wrapper around
+    `concatenate_filtered_segments` (filtering + stitching) followed by
+    `detect_minis_in_concatenated_trace` (the actual detection); call those
+    directly if you need the concatenated trace on its own.
+    """
+    config = config or MiniDetectionConfig()
+    concatenated = concatenate_filtered_segments(segments, sample_rate_hz, config)
+    return detect_minis_in_concatenated_trace(
+        concatenated, sample_rate_hz, config, boundary_guard_ms=boundary_guard_ms
+    )
