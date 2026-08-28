@@ -324,7 +324,137 @@ def plotScatterBar(data,
     return ax
 
 
-def plot_psth(spike_data, time_window=None, bin_size_ms=50, ax=None, 
+def plotStats(data1,
+              data2,
+              xloc=(0, 1),
+              ax=None,
+              test='kstest',
+              text_type='*',
+              linewidth=2,
+              line_length_proportion=0.75,
+              fontsize=12,
+              y_portion=1.0,
+              y_portion_noise=0.0,
+              yloc=None,
+              color='k',
+              rng=None):
+    """
+    Test two samples and draw the comparison bar with stars or a p-value.
+
+    Python port of NeuroDAP's `plotStats.m`, intended to annotate groups
+    drawn by `plotScatterBar`.
+
+    Parameters
+    ----------
+    data1, data2 : array-like
+        The two samples to compare. Non-finite values are dropped.
+    xloc : sequence of two floats
+        X positions of the two compared groups (default (0, 1)).
+    ax : matplotlib.axes.Axes, optional
+        Target axes; defaults to the current axes.
+    test : {'kstest', 'ranksum', 'signrank', 'ttest', 'ttest_paired'}
+        Two-sample Kolmogorov-Smirnov (default), Mann-Whitney U,
+        Wilcoxon signed-rank, Welch-free independent t-test, or paired
+        t-test. 'signrank' and 'ttest_paired' require equal sample sizes.
+    text_type : {'*', 'p'}
+        Annotate with significance stars or with `p = <value>`.
+    linewidth : float
+        Line width of the comparison bar (default 2).
+    line_length_proportion : float
+        Bar length as a fraction of the distance between `xloc` (default 0.75).
+    fontsize : float
+        Annotation font size (default 12).
+    y_portion : float
+        When `yloc` is None, the bar height as a fraction of the pooled data
+        range, measured from the end of the range nearer zero (default 1.0).
+    y_portion_noise : float
+        Uniform jitter added to `y_portion`, useful to unstack several bars
+        (default 0.0, i.e. deterministic).
+    yloc : float, optional
+        Explicit bar height, overriding `y_portion`.
+    color : matplotlib color
+        Bar and text color (default black).
+    rng : numpy.random.Generator, optional
+        Generator backing `y_portion_noise`.
+
+    Returns
+    -------
+    p_value : float
+        The two-sided p-value of the selected test.
+    """
+    from scipy import stats as _stats
+
+    x = np.asarray(data1, dtype=float).ravel()
+    y = np.asarray(data2, dtype=float).ravel()
+    x = x[np.isfinite(x)]
+    y = y[np.isfinite(y)]
+    if x.size == 0 or y.size == 0:
+        raise ValueError("Both samples must contain at least one finite value.")
+
+    test = str(test).strip().lower()
+    if test in ('kstest', 'ks', 'ks_2samp'):
+        p_value = float(_stats.ks_2samp(x, y).pvalue)
+    elif test in ('ranksum', 'mannwhitney', 'mannwhitneyu'):
+        p_value = float(_stats.mannwhitneyu(x, y, alternative='two-sided').pvalue)
+    elif test in ('signrank', 'wilcoxon'):
+        if x.size != y.size:
+            raise ValueError("'signrank' requires paired samples of equal size.")
+        p_value = float(_stats.wilcoxon(x, y, alternative='two-sided').pvalue)
+    elif test in ('ttest', 'ttest2', 'ttest_ind'):
+        p_value = float(_stats.ttest_ind(x, y).pvalue)
+    elif test in ('ttest_paired', 'ttest_rel'):
+        if x.size != y.size:
+            raise ValueError("'ttest_paired' requires samples of equal size.")
+        p_value = float(_stats.ttest_rel(x, y).pvalue)
+    else:
+        raise ValueError(
+            "test must be one of 'kstest', 'ranksum', 'signrank', 'ttest', "
+            f"or 'ttest_paired'; received {test!r}."
+        )
+
+    if ax is None:
+        ax = plt.gca()
+
+    # Horizontal extent of the bar, centered between the two groups
+    xloc = np.asarray(xloc, dtype=float).ravel()
+    if xloc.size != 2:
+        raise ValueError(f"xloc must have length 2, got {xloc.size}")
+    line_length = (xloc[1] - xloc[0]) * line_length_proportion
+    line_center = float(np.mean(xloc))
+    line_start = line_center - line_length / 2
+    line_end = line_center + line_length / 2
+
+    # Bar height, either explicit or a portion of the pooled data range
+    if yloc is None:
+        pooled = np.concatenate([x, y])
+        lower, upper = float(np.min(pooled)), float(np.max(pooled))
+        portion = y_portion
+        if y_portion_noise:
+            if rng is None:
+                rng = np.random.default_rng()
+            portion += float(rng.random()) * y_portion_noise
+        if abs(upper) >= abs(lower):
+            height = portion * (upper - lower) + lower
+        else:
+            height = portion * (lower - upper) + upper
+    else:
+        height = float(yloc)
+
+    ax.plot([line_start, line_end], [height, height],
+            color=color, linewidth=linewidth)
+    label = (
+        _p_to_stars(p_value, four_levels=True)
+        if text_type == '*'
+        else f"p = {p_value:.4f}"
+    )
+    ax.text(line_center, height, label,
+            fontsize=fontsize, color=color,
+            ha='center', va='bottom')
+
+    return p_value
+
+
+def plot_psth(spike_data, time_window=None, bin_size_ms=50, ax=None,
               color='blue', label=None, alpha=0.7, show_sem=True):
     """
     Plot Peri-Stimulus Time Histogram (PSTH)
@@ -766,7 +896,22 @@ def _bootstrap_null_mean(data, n_boot=5000, rng=None,
     return observed_mean, sim_avg, pval
 
 
-def _p_to_stars(p):
+def _p_to_stars(p, four_levels=False):
+    """Map a p-value to significance stars.
+
+    `four_levels=True` matches NeuroDAP's `plotStats.m` thresholds, which add
+    a "****" tier at p <= 1e-4 and use inclusive comparisons.
+    """
+    if four_levels:
+        if p > 0.05:
+            return "n.s."
+        if p <= 1e-4:
+            return "****"
+        if p <= 1e-3:
+            return "***"
+        if p <= 1e-2:
+            return "**"
+        return "*"
     if p < 0.001:
         return "***"
     if p < 0.01:

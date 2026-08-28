@@ -89,6 +89,7 @@ from .plots import (
     plot_pca,
     plot_all_units,
     plotScatterBar,
+    plotStats,
     plot_distribution,
     generate_boot_data,
 )
@@ -187,6 +188,7 @@ __all__ = [
     'plot_pca',
     'plot_all_units',
     'plotScatterBar',
+    'plotStats',
     'plot_distribution',
     'generate_boot_data',
 
