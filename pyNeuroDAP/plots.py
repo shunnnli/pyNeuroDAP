@@ -314,7 +314,8 @@ def plotScatterBar(data,
         r, g, b, _ = col
         scat_col = (r, g, b, scatter_alpha)
         jit = (np.random.rand(len(group)) - 0.5) * jitter
-        ax.scatter(xi + jit, group, color=scat_col, s=10)
+        ax.scatter(xi + jit, group, color=scat_col, s=10, linewidths=0,
+                   edgecolors='none')
 
     # set tick labels
     if labels is not None:
