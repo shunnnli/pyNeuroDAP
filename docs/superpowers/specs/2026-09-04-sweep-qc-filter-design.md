@@ -46,7 +46,10 @@ Measured on `SL455/Results-20260822`:
   `{metric: (min, max)}` dict so other metrics need no new code.
 - Both routes to the data are implemented: MATLAB is fixed so future exports
   are plainly readable, and a decoder covers files that already exist. No
-  existing `cells_DMD_*.mat` is rewritten.
+  existing `cells_DMD_*.mat` is rewritten and no re-save script is needed,
+  since the decoder already reads them.
+- A sweep whose metric is missing even after the header fallback is kept, and
+  counted as unjudged, rather than dropped silently.
 
 ## Design
 
@@ -69,8 +72,10 @@ Existing files are unaffected and are handled by the decoder below.
 
 ### 2. Python (`pyNeuroDAP/slice.py`)
 
-`load_cell_qc(cells_mat_path) -> pd.DataFrame`, exported from `__init__.py`.
-One tidy row per sweep:
+Three functions, exported from `__init__.py`. One reads, one decides, one is
+applied by the notebook.
+
+`load_cell_qc(cells_mat_path) -> pd.DataFrame`, one tidy row per sweep:
 
     cell, search_idx, depth, sweep_order, repetition, sweep, vhold_mv,
     included, reconstructed, Rs, Rm, Cm, tau, Verror, Ibaseline,
@@ -80,7 +85,7 @@ One tidy row per sweep:
 `sweep_order` is the 0-based row index within the QC table, which is the index
 into that spot's trace rows.
 
-Two source paths, tried in order:
+Two source paths, tried per entry:
 
 1. **Plain struct** (new exports): read the `QC` column directly.
 2. **MCOS decode** (existing exports): harvest every `#subsystem#/MCOS`
@@ -93,47 +98,73 @@ Two source paths, tried in order:
 The decode path validates rather than trusting: each table's `Depth` column
 must be constant and equal `Response map.depths[search][depth_index]`, and the
 handle count must equal the harvested table count. A mismatch raises instead of
-returning a silently mis-paired frame. `Sweep` names are decoded best-effort
-from the MATLAB `string` blob and left `None` on failure; nothing depends on
-them.
+returning a silently mis-paired frame. A QC entry that is present but does not
+decode warns, so quality metrics are never dropped silently.
+
+`Sweep` names are decoded from the MATLAB `string` blob stored beside each
+table and accepted only when the parse yields exactly one name per QC row;
+otherwise they are `None`. Nothing depends on them.
 
 The reader touches only the MCOS blob, the `Cell` and `QC` columns, and
 `depths`, never the trace arrays, so it does not repeat the slow full load.
+Measured at 0.1-0.3 s per animal.
+
+`qc_metric_values(qc_df, metric)` returns one metric with its header estimate
+filled in where the computed value is missing, per `QC_METRIC_FALLBACKS`
+(`Rs`, `Rm`, `Cm`).
+
+`apply_qc_limits(qc_df, limits)` returns a copy with `qc_pass`, `qc_reason`,
+and `qc_unjudged`. `limits` is `{metric: (min, max)}`, both bounds inclusive,
+`None` leaving a side open, and a bare number read as a maximum. A sweep whose
+metric is missing even after the fallback **passes** and is flagged in
+`qc_unjudged`: the limits remove sweeps known to be bad, not sweeps of unknown
+quality, and the count is printed rather than left silent.
 
 ### 3. Notebook
 
-One new helper function in the helper block:
+One new helper cell, inserted at the end of the helper block:
 
-`filter_sweeps_by_qc(hotspot_df, trace_cache, limits, min_sweeps)` returning
-`(filtered_df, filtered_trace_cache, sweep_qc_log_df)`. It loads QC for each
-`(animal, results_folder)` already present in the cache, applies the limits,
-drops failing sweep rows from each spot's `traces` array, rewrites `n_sweeps`,
-drops spots left below `min_sweeps`, and prints a kept/total line the way
-`apply_hotspot_type` already does. Per spot it requires
-`n_sweeps == n_qc_rows`; if they disagree it leaves that spot unfiltered and
-logs `qc sweep count mismatch` rather than guessing. Empty `limits` is a
-pass-through.
+- `load_sweep_qc_data(hotspot_df)` -> `(sweep_qc_df, load_log_df)`, iterating
+  the `(animal, results_folder)` pairs already in the cache and following the
+  existing `load_*_data` log convention.
+- `filter_sweeps_by_qc(hotspot_df, trace_cache, limits, min_sweeps)` ->
+  `(filtered_df, filtered_trace_cache, log_df)`. Resolves the keep mask once
+  per `(cell, search, depth)` because every spot stimulated in one sweep shares
+  that sweep's metrics, drops failing rows from each spot's `traces`, rewrites
+  `n_sweeps`, recomputes `max_current_pa` / `min_current_pa` (both read
+  directly from the base table downstream, so they must follow the surviving
+  sweeps), drops spots left below `min_sweeps`, and prints a kept/total line
+  the way `apply_hotspot_type` already does. Per spot it requires
+  `n_sweeps == n_qc_rows`; if they disagree it leaves that spot unfiltered and
+  logs `qc sweep count mismatch`. Empty `limits` is a pass-through.
 
-Cell 29, under the existing *Quality check params* heading, holds the config
-and the call:
+`log_df` columns: `animal, results_folder, cell, search_idx, final_depth,
+spot_idx, n_sweeps, n_pass, n_kept, status`, where `n_pass` counts sweeps that
+cleared the limits and `n_kept` counts sweeps actually retained (0 for a spot
+dropped by the `min_sweeps` rule).
+
+The *Quality check params* cell holds the config and the call:
 
 ```python
-SWEEP_QC_LIMITS = {"Rs": (None, 30.0)}   # metric -> (min, max), inclusive
-SWEEP_QC_ENABLED = True
+SWEEP_QC_LIMITS = {"Rs": 30.0}   # metric -> (min, max), inclusive
 ```
 
-Cell 35 then consumes `qc_hotspot_base_df` and `qc_hotspot_trace_cache`,
-raising the notebook's usual "run the QC cell first" `RuntimeError` if cell 29
-has not run. Sign, charge, contribution, and `detect_evoked_hotspots` all read
-the cache, so they inherit the filter with no further change.
+followed by a per-animal summary of what the limits cost. The metric-calculation
+cell then consumes `qc_hotspot_base_df` and `qc_hotspot_trace_cache`, raising
+the notebook's usual "run the QC cell first" `RuntimeError` if the QC cell has
+not run. Sign, charge, contribution, `apply_hotspot_type`, and the pooled
+`detect_evoked_hotspots` distribution cell all read the cache, so they inherit
+the filter.
 
 ### 4. Tests
 
-Synthetic h5py fixtures for both source paths, including the decode path's
-validation failures (count mismatch, depth mismatch), plus pure-function tests
-for limit evaluation, the `Rs` header fallback, sweep dropping, the
-`min_sweeps` rule, and the sweep-count-mismatch escape. Then a run against the
-real SL455 export to report how many sweeps `Rs <= 30` actually drops.
+`tests/test_slice_qc.py` builds synthetic MATLAB v7.3 fixtures covering both
+source paths and asserts on sweep counts, `sweep_order`, decoded sweep names,
+multi-cell and multi-search separation, the missing-`QC`-column case, and both
+validation failures (unpairable table count, depth disagreement) plus the
+undecodable-entry warning. Pure-function tests cover the header fallback,
+scalar-as-maximum, both bounds, the failure reason text, multiple metrics,
+unjudged sweeps, empty limits, and non-mutation of the input.
 
 ## Out of scope
 
