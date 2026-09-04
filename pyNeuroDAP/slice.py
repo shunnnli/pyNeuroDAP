@@ -500,6 +500,513 @@ def load_cells_table(cells_mat_path: Union[str, Path]) -> pd.DataFrame:
     return df
 
 
+# ---------------------------------------------------------------------------
+# Per-sweep quality control
+# ---------------------------------------------------------------------------
+
+# Variable order written by ``localSummarizeDMDQC`` in loadSlicesDMD.m.
+QC_VARIABLE_NAMES = (
+    "Sweep", "Depth", "Repetition", "Vhold", "included", "reconstructed",
+    "Rs", "Rm", "Cm", "tau", "Verror", "Ibaseline", "Ibaseline_std",
+    "Ibaseline_var", "Rs_headerString", "Rm_headerString", "Cm_headerString",
+)
+
+QC_METRIC_NAMES = (
+    "Rs", "Rm", "Cm", "tau", "Verror", "Ibaseline", "Ibaseline_std",
+    "Ibaseline_var", "Rs_headerString", "Rm_headerString", "Cm_headerString",
+)
+
+CELL_QC_COLUMNS = [
+    "cell", "search_idx", "depth", "sweep_order", "repetition", "sweep",
+    "vhold_mv", "included", "reconstructed", *QC_METRIC_NAMES,
+]
+
+
+def _decode_matlab_string_blob(blob) -> Optional[list]:
+    """
+    Decode a MATLAB ``string`` array serialized as a uint64 vector.
+
+    Layout is ``[version, ndims, dims..., char_count_per_element...,
+    packed UTF-16LE data]``.  Returns None for anything that does not parse,
+    since callers treat sweep names as optional.
+    """
+    values = np.asarray(blob).ravel()
+    if values.dtype.kind not in "ui" or values.size < 3:
+        return None
+    n_dims = int(values[1])
+    if n_dims < 1 or values.size < 2 + n_dims:
+        return None
+    dims = [int(v) for v in values[2:2 + n_dims]]
+    n_elements = int(np.prod(dims))
+    if n_elements <= 0 or values.size < 2 + n_dims + n_elements:
+        return None
+
+    counts = [int(v) for v in values[2 + n_dims:2 + n_dims + n_elements]]
+    if any(count < 0 for count in counts):
+        return None
+    packed = values[2 + n_dims + n_elements:].astype(np.uint64).tobytes()
+    if sum(counts) * 2 > len(packed):
+        return None
+
+    names = []
+    offset = 0
+    for count in counts:
+        names.append(
+            packed[offset * 2:(offset + count) * 2].decode(
+                "utf-16-le", errors="replace"
+            )
+        )
+        offset += count
+    return names
+
+
+def _read_qc_data_cell(f: h5py.File, item) -> Optional[dict]:
+    """
+    Read one QC table's MCOS ``data`` property, or None if *item* is not one.
+
+    A QC table stores its variables as a ``(17, 1)`` cell array whose first
+    element is the ``Sweep`` string object and whose remaining elements are
+    equal-length double columns.  Requiring that exact shape keeps unrelated
+    MCOS objects out.
+    """
+    if not isinstance(item, h5py.Dataset):
+        return None
+    if item.dtype != object or item.shape != (len(QC_VARIABLE_NAMES), 1):
+        return None
+
+    refs = item[()].ravel()
+    columns: dict = {}
+    length = None
+    for name, ref in zip(QC_VARIABLE_NAMES, refs):
+        try:
+            target = f[ref]
+        except Exception:
+            return None
+        is_float = isinstance(target, h5py.Dataset) and target.dtype.kind == "f"
+        if name == "Sweep":
+            # Sweep is a string object, so a float here means this is not a
+            # QC table.
+            if is_float:
+                return None
+            continue
+        if not is_float:
+            return None
+        values = np.asarray(target[()], dtype=float).ravel()
+        if length is None:
+            length = values.size
+        elif values.size != length:
+            return None
+        columns[name] = values
+
+    if not length:
+        return None
+    return columns
+
+
+def _qc_object_id(value) -> Optional[int]:
+    """Return the MCOS object id carried by one QC cell entry, or None."""
+    array = np.asarray(value).ravel()
+    if array.dtype.kind not in "ui" or array.size < 6:
+        return None
+    return int(array[4])
+
+
+def _qc_struct_columns(leaf: dict) -> Optional[dict]:
+    """Normalize a plainly-saved QC struct into equal-length columns."""
+    columns: dict = {}
+    length = None
+    for name in QC_VARIABLE_NAMES:
+        if name == "Sweep":
+            continue
+        if name not in leaf:
+            return None
+        values = np.asarray(
+            np.atleast_1d(leaf[name]), dtype=float
+        ).ravel()
+        if length is None:
+            length = values.size
+        elif values.size != length:
+            return None
+        columns[name] = values
+
+    if not length:
+        return None
+
+    sweeps = leaf.get("Sweep")
+    if isinstance(sweeps, str):
+        sweeps = [sweeps]
+    elif isinstance(sweeps, (list, tuple, np.ndarray)):
+        sweeps = [
+            item if isinstance(item, str) else None
+            for item in np.asarray(sweeps, dtype=object).ravel()
+        ]
+    else:
+        sweeps = None
+    if sweeps is not None and len(sweeps) != length:
+        sweeps = None
+    columns["Sweep"] = sweeps
+    return columns
+
+
+def _qc_expected_depths(f: h5py.File, rmap_items, n_rows: int) -> list:
+    """
+    Read only ``Response map.depths`` for every cell, for validation.
+
+    Reading the whole response map would pull in every trace array, so the
+    ``depths`` field is dereferenced on its own.
+    """
+    expected = []
+    for row in range(n_rows):
+        item = (
+            rmap_items[row]
+            if rmap_items is not None and row < len(rmap_items)
+            else None
+        )
+        depths = None
+        if isinstance(item, h5py.Group) and "depths" in item:
+            try:
+                depths = _h5_read_item(f, item["depths"])
+            except Exception:
+                depths = None
+        expected.append([
+            np.asarray(search, dtype=float).ravel()
+            if search is not None else np.empty(0)
+            for search in _normalize_search_list(depths)
+        ])
+    return expected
+
+
+def _qc_entries(f: h5py.File, qc_items, n_rows: int) -> list:
+    """Flatten the QC column into one entry per (cell row, search, depth)."""
+    entries = []
+    for row in range(n_rows):
+        try:
+            value = _h5_read_item(f, qc_items[row])
+        except Exception:
+            continue
+        for search_idx, per_search in enumerate(_normalize_search_list(value)):
+            for depth_idx, leaf in enumerate(
+                _normalize_search_list(per_search)
+            ):
+                entries.append({
+                    "row": row,
+                    "search_idx": search_idx,
+                    "depth_idx": depth_idx,
+                    "leaf": leaf,
+                })
+    return entries
+
+
+def _resolve_qc_columns(f: h5py.File, entries: list) -> None:
+    """
+    Attach decoded QC columns to every entry, in place.
+
+    Plainly-saved structs are read directly.  Entries that are MCOS handles
+    (a MATLAB ``table``, which hides its values in ``#subsystem#/MCOS``) are
+    paired with the harvested ``data`` cells by ascending object id.
+    """
+    handle_slots = []
+    for slot, entry in enumerate(entries):
+        leaf = entry["leaf"]
+        if isinstance(leaf, dict):
+            entry["columns"] = _qc_struct_columns(leaf)
+            continue
+        entry["columns"] = None
+        object_id = _qc_object_id(leaf)
+        if object_id is not None:
+            handle_slots.append((object_id, slot))
+
+    if not handle_slots:
+        return
+
+    file_wrapper = np.asarray(f["#subsystem#"]["MCOS"][()]).ravel()
+    candidates = []
+    for index, ref in enumerate(file_wrapper):
+        try:
+            item = f[ref]
+        except Exception:
+            continue
+        columns = _read_qc_data_cell(f, item)
+        if columns is not None:
+            candidates.append((index, columns))
+
+    if len(candidates) != len(handle_slots):
+        raise ValueError(
+            f"Found {len(candidates)} QC tables in #subsystem#/MCOS but "
+            f"{len(handle_slots)} QC handles in the cells table; refusing to "
+            "guess the pairing."
+        )
+
+    for (_, slot), (index, columns) in zip(
+        sorted(handle_slots), candidates
+    ):
+        columns = dict(columns)
+        columns["Sweep"] = _qc_sweep_names(
+            f, file_wrapper, index, len(columns["Depth"])
+        )
+        entries[slot]["columns"] = columns
+
+
+def _qc_sweep_names(
+    f: h5py.File, file_wrapper: np.ndarray, index: int, n_rows: int
+) -> Optional[list]:
+    """
+    Decode the sweep names stored beside a QC table's ``data`` cell.
+
+    The ``Sweep`` string object is serialized immediately before its table, so
+    the preceding element is parsed and accepted only when it yields exactly
+    one name per QC row.  Sweep names are informational, so anything else
+    yields None rather than an error.
+    """
+    if index <= 0:
+        return None
+    try:
+        item = f[file_wrapper[index - 1]]
+    except Exception:
+        return None
+    if not isinstance(item, h5py.Dataset) or item.dtype.kind not in "ui":
+        return None
+    names = _decode_matlab_string_blob(item[()])
+    if names is None or len(names) != n_rows:
+        return None
+    return names
+
+
+def load_cell_qc(cells_mat_path: Union[str, Path]) -> pd.DataFrame:
+    """
+    Load the per-sweep quality metrics from a ``cells_DMD_*.mat`` file.
+
+    ``loadSlicesDMD.m`` measures series resistance and friends for every sweep
+    (``getCellQC``) and summarizes them per cell, search, and depth in
+    ``localSummarizeDMDQC``.  Newer exports save that summary as a plain struct
+    and are read directly.  Older exports saved it as a MATLAB ``table``, which
+    is a classdef object: the ``QC`` column then holds only MCOS handles and
+    the values sit in ``#subsystem#/MCOS``, so they are decoded and paired back
+    to their cell, search, and depth here.
+
+    Each returned row is one sweep.  ``sweep_order`` is that sweep's 0-based
+    position within its search and depth, which is also its row index in the
+    trace arrays :func:`get_spot_response` returns.
+
+    Parameters
+    ----------
+    cells_mat_path : str or Path
+        Path to the ``cells_DMD_*.mat`` file.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns ``cell``, ``search_idx``, ``depth``, ``sweep_order``,
+        ``repetition``, ``sweep``, ``vhold_mv``, ``included``,
+        ``reconstructed``, and one column per QC metric.  Empty when the file
+        records no QC data.
+
+    Raises
+    ------
+    ValueError
+        When the decoded QC tables cannot be paired to the cells table
+        unambiguously, or when a decoded table's depth disagrees with the
+        depth its cell's response map records.
+    """
+    cells_mat_path = str(cells_mat_path)
+
+    with h5py.File(cells_mat_path, "r") as f:
+        col_names = _get_table_column_names(f)
+        if "QC" not in col_names:
+            return pd.DataFrame(columns=CELL_QC_COLUMNS)
+
+        table = _read_mcos_column_data(f, col_names)
+        if table is None or "QC" not in table["columns"]:
+            warnings.warn(
+                f"Could not read the QC column from {cells_mat_path}; "
+                "returning no quality metrics.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return pd.DataFrame(columns=CELL_QC_COLUMNS)
+
+        columns = table["columns"]
+        n_rows = table["n_rows"]
+        cell_ids = [
+            int(value) if np.isfinite(value) else None
+            for value in np.asarray(columns.get("Cell", []), dtype=float)
+        ]
+        expected_depths = _qc_expected_depths(
+            f, columns.get("Response map"), n_rows
+        )
+
+        entries = _qc_entries(f, columns["QC"], n_rows)
+        _resolve_qc_columns(f, entries)
+
+        records = []
+        unresolved = 0
+        for entry in entries:
+            qc_columns = entry["columns"]
+            if qc_columns is None:
+                # An absent QC entry is normal; one that is present but did
+                # not decode means quality metrics are being lost.
+                if entry["leaf"] is not None:
+                    unresolved += 1
+                continue
+
+            row = entry["row"]
+            search_idx = entry["search_idx"]
+            depth_idx = entry["depth_idx"]
+            depths = qc_columns["Depth"]
+
+            searches = expected_depths[row] if row < len(expected_depths) else []
+            if search_idx < len(searches) and depth_idx < len(searches[search_idx]):
+                expected = float(searches[search_idx][depth_idx])
+                found = np.unique(depths[np.isfinite(depths)])
+                if found.size and not np.allclose(found, expected):
+                    raise ValueError(
+                        f"QC table for cell {cell_ids[row]} search "
+                        f"{search_idx} depth index {depth_idx} reports depths "
+                        f"{found.tolist()} but the response map records "
+                        f"{expected}; refusing to return a mis-paired table."
+                    )
+
+            sweeps = qc_columns.get("Sweep")
+            for sweep_order in range(len(depths)):
+                record = {
+                    "cell": cell_ids[row] if row < len(cell_ids) else None,
+                    "search_idx": search_idx,
+                    "depth": (
+                        int(depths[sweep_order])
+                        if np.isfinite(depths[sweep_order]) else None
+                    ),
+                    "sweep_order": sweep_order,
+                    "repetition": qc_columns["Repetition"][sweep_order],
+                    "sweep": (
+                        sweeps[sweep_order] if sweeps is not None else None
+                    ),
+                    "vhold_mv": qc_columns["Vhold"][sweep_order],
+                    "included": qc_columns["included"][sweep_order],
+                    "reconstructed": qc_columns["reconstructed"][sweep_order],
+                }
+                for name in QC_METRIC_NAMES:
+                    record[name] = qc_columns[name][sweep_order]
+                records.append(record)
+
+    if unresolved:
+        warnings.warn(
+            f"{unresolved} QC entries in {cells_mat_path} could not be "
+            "decoded and are missing from the result.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    qc_df = pd.DataFrame.from_records(records, columns=CELL_QC_COLUMNS)
+    if qc_df.empty:
+        return qc_df
+    return qc_df.sort_values(
+        ["cell", "search_idx", "depth", "sweep_order"]
+    ).reset_index(drop=True)
+
+
+# Metrics with a second, header-derived estimate to fall back on when the
+# computed value is missing.
+QC_METRIC_FALLBACKS = {
+    "Rs": "Rs_headerString",
+    "Rm": "Rm_headerString",
+    "Cm": "Cm_headerString",
+}
+
+
+def qc_metric_values(
+    qc_df: pd.DataFrame, metric: str, fallbacks: Optional[dict] = None
+) -> pd.Series:
+    """
+    Return one QC metric, falling back to its header estimate where missing.
+
+    ``getCellQC`` computes ``Rs`` from the RC step and separately records the
+    ``Rs`` the acquisition software wrote into the sweep header.  The computed
+    value is preferred; the header value fills in only where the computed one
+    could not be fit.
+    """
+    fallbacks = QC_METRIC_FALLBACKS if fallbacks is None else fallbacks
+    if metric not in qc_df.columns:
+        raise KeyError(
+            f"QC metric {metric!r} is not a column; available metrics are "
+            f"{[name for name in QC_METRIC_NAMES if name in qc_df.columns]}."
+        )
+
+    values = pd.to_numeric(qc_df[metric], errors="coerce")
+    fallback = fallbacks.get(metric)
+    if fallback is not None and fallback in qc_df.columns:
+        values = values.fillna(pd.to_numeric(qc_df[fallback], errors="coerce"))
+    return values
+
+
+def apply_qc_limits(
+    qc_df: pd.DataFrame,
+    limits: Optional[dict] = None,
+    fallbacks: Optional[dict] = None,
+) -> pd.DataFrame:
+    """
+    Mark which sweeps satisfy a set of quality limits.
+
+    Parameters
+    ----------
+    qc_df : pd.DataFrame
+        Per-sweep metrics from :func:`load_cell_qc`.
+    limits : dict, optional
+        ``{metric: (minimum, maximum)}``, both bounds inclusive and either
+        one ``None`` to leave that side open.  A bare number is read as a
+        maximum, so ``{"Rs": 30}`` and ``{"Rs": (None, 30)}`` agree.  Empty or
+        None passes every sweep.
+    fallbacks : dict, optional
+        Metric-to-fallback mapping; defaults to :data:`QC_METRIC_FALLBACKS`.
+
+    Returns
+    -------
+    pd.DataFrame
+        *qc_df* plus ``qc_pass`` and ``qc_reason``.  ``qc_reason`` names every
+        limit a sweep failed, and is empty for sweeps that passed.
+
+    Notes
+    -----
+    A sweep whose metric is missing even after the header fallback **passes**:
+    the limits remove sweeps that are known to be bad, not sweeps of unknown
+    quality.  Those sweeps are counted in ``qc_unjudged`` so the choice stays
+    visible rather than silent.
+    """
+    marked = qc_df.copy()
+    marked["qc_pass"] = True
+    marked["qc_unjudged"] = False
+    reasons = pd.Series([[] for _ in range(len(marked))], index=marked.index)
+
+    for metric, bounds in (limits or {}).items():
+        if bounds is None:
+            continue
+        if np.isscalar(bounds):
+            minimum, maximum = None, bounds
+        else:
+            minimum, maximum = bounds
+
+        values = qc_metric_values(marked, metric, fallbacks)
+        missing = values.isna()
+        marked.loc[missing, "qc_unjudged"] = True
+
+        if minimum is not None:
+            failed = values.lt(float(minimum)) & ~missing
+            marked.loc[failed, "qc_pass"] = False
+            for index in marked.index[failed]:
+                reasons[index].append(
+                    f"{metric}={values[index]:.3g}<{float(minimum):.3g}"
+                )
+        if maximum is not None:
+            failed = values.gt(float(maximum)) & ~missing
+            marked.loc[failed, "qc_pass"] = False
+            for index in marked.index[failed]:
+                reasons[index].append(
+                    f"{metric}={values[index]:.3g}>{float(maximum):.3g}"
+                )
+
+    marked["qc_reason"] = reasons.map("; ".join)
+    return marked
+
+
 def _load_cells_table_by_count(
     f: h5py.File, col_names: Sequence[str]
 ) -> pd.DataFrame:

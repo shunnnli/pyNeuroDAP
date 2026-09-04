@@ -112,6 +112,11 @@ from .mat import (
 
 from .slice import (
     load_cells_table,
+    load_cell_qc,
+    CELL_QC_COLUMNS,
+    QC_METRIC_NAMES,
+    qc_metric_values,
+    apply_qc_limits,
     index_results_folder,
     load_spots_depth_mat,
     results_to_long_dataframe,
@@ -208,6 +213,11 @@ __all__ = [
 
     # DMD slice analysis
     'load_cells_table',
+    'load_cell_qc',
+    'CELL_QC_COLUMNS',
+    'QC_METRIC_NAMES',
+    'qc_metric_values',
+    'apply_qc_limits',
     'index_results_folder',
     'load_spots_depth_mat',
     'results_to_long_dataframe',
