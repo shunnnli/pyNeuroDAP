@@ -173,6 +173,7 @@ def plotScatterBar(data,
                    positions=None,
                    width=0.6,
                    scatter_alpha=0.8,
+                   scatter_size=10,
                    error_bar_width=2,
                    error_bar_darker_factor=0.7):
     """
@@ -198,6 +199,11 @@ def plotScatterBar(data,
         Total width allocated per group.
     scatter_alpha : float
         Alpha for the overlaid scatter points (default 0.8).
+    scatter_size : float
+        Marker area of the overlaid scatter points (default 10).  Raise it
+        when each point stands for an animal or a cell rather than a single
+        observation, so the summarized unit reads larger than any background
+        cloud drawn behind it.
     error_bar_width : float
         Line width for whiskers/caps (box) or error bars (bar) (default 2).
     error_bar_darker_factor : float
@@ -314,8 +320,8 @@ def plotScatterBar(data,
         r, g, b, _ = col
         scat_col = (r, g, b, scatter_alpha)
         jit = (np.random.rand(len(group)) - 0.5) * jitter
-        ax.scatter(xi + jit, group, color=scat_col, s=10, linewidths=0,
-                   edgecolors='none')
+        ax.scatter(xi + jit, group, color=scat_col, s=scatter_size,
+                   linewidths=0, edgecolors='none')
 
     # set tick labels
     if labels is not None:
