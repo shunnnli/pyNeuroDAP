@@ -58,6 +58,7 @@ except ImportError:
 
 from .trials import (
     get_onset_times,
+    find_behavior_file,
     get_trial_table,
     get_trial_times,
     get_trial_data,
@@ -164,6 +165,7 @@ __all__ = [
 
     # Trial management
     'get_onset_times',
+    'find_behavior_file',
     'get_trial_table',
     'get_trial_times',
     'get_trial_data',

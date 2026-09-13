@@ -1,3 +1,4 @@
+import os
 import re
 import warnings
 
@@ -97,6 +98,50 @@ def extract_lick_columns(df, side):
     return lick_cols
 
 
+def find_behavior_file(session_folder, filename='trial_data.csv', required=True):
+    """
+    Locate a behavior file belonging to a session.
+
+    Sessions may keep behavior files either at the top level or inside a
+    'behavior' subfolder, so both layouts are searched (plus any other
+    immediate subfolder as a last resort).
+
+    Parameters:
+    - session_folder: str, path to session folder
+    - filename: str, name of the behavior file to find
+    - required: bool, raise FileNotFoundError if missing (else return None)
+
+    Returns:
+    - path: str, full path to the file, or None if missing and required=False
+    """
+    session_folder = str(session_folder)
+
+    # Preferred locations first, then any other subfolder
+    candidates = [
+        os.path.join(session_folder, 'behavior', filename),
+        os.path.join(session_folder, filename),
+    ]
+    if os.path.isdir(session_folder):
+        for name in sorted(os.listdir(session_folder)):
+            subfolder = os.path.join(session_folder, name)
+            if os.path.isdir(subfolder):
+                candidate = os.path.join(subfolder, filename)
+                if candidate not in candidates:
+                    candidates.append(candidate)
+
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+
+    if required:
+        searched = "\n".join(f"  {c}" for c in candidates)
+        raise FileNotFoundError(
+            f"Could not find '{filename}' for session "
+            f"'{os.path.basename(session_folder.rstrip(os.sep))}'.\nLooked in:\n{searched}"
+        )
+    return None
+
+
 def get_trial_table(session_folder, trial_range='all'):
     """
     Get trial table for a given session and trial range
@@ -108,8 +153,8 @@ def get_trial_table(session_folder, trial_range='all'):
     Returns:
     - all_trial_data_df: pandas DataFrame, trial data with lick information
     """
-    # Load trial data from csv
-    csv_path_csv = rf"{session_folder}/trial_data.csv"
+    # Load trial data from csv (top level or behavior subfolder)
+    csv_path_csv = find_behavior_file(session_folder, 'trial_data.csv')
     all_trial_data_df = pd.read_csv(csv_path_csv)
 
     # Select trials
@@ -185,7 +230,8 @@ def get_trial_times(trial_data_df, trial_conditions):
         try:
             trial_number = trial['TrialNumber']
             trial_time = trial['TimeStart']
-            is_laser = trial['IsLaserTrial'] == 1
+            # Sessions without laser trials may not have an IsLaserTrial column
+            is_laser = trial.get('IsLaserTrial', 0) == 1
             is_right = trial['TrialSide'] == 'Right'
             is_rewarded = trial['RMI'] == 'reward'
 

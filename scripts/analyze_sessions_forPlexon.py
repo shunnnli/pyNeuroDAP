@@ -8,15 +8,17 @@ from tqdm import tqdm
 
 # Select multiple sessions using GUI
 print("Please select session folders for analysis...")
-# session_folders = ndap.select_sessions("Select Session Folders for Analysis")
-session_folders = ["/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_DCN_1_250323_5mW_500ms_500delay_032325001",
-                "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_DCN_1_250328_Licking_032825001",
-                "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_DCN_1_250411_MixedmW_500ms_041225001",
-                "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_SNr_3_250607_laser2point5mW_500ms_500delay_060725001",
-                "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_SNr_3_250608_laser2point5mW_500ms_0delay_060825001",
-                "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_SNr_4_250615_500delay_500ms_5mW_Licking_061525001",
-                "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_SNr_4_250616_500ms_5mW_061625001",
-]
+default_path = "/Volumes/Neurobio/MICROSCOPE/Paolo/FromFor/ForShun_Invivo2"
+session_folders = ndap.select_sessions("Select Session Folders for Analysis", default_path=default_path)
+# session_folders = ["/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_DCN_1_250323_5mW_500ms_500delay_032325001",
+#                 "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_DCN_1_250328_Licking_032825001",
+#                 "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_DCN_1_250411_MixedmW_500ms_041225001",
+#                 "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_SNr_3_250607_laser2point5mW_500ms_500delay_060725001",
+#                 "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_SNr_3_250608_laser2point5mW_500ms_0delay_060825001",
+#                 "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_SNr_4_250615_500delay_500ms_5mW_Licking_061525001",
+#                 "/Volumes/MICROSCOPE/Paolo/FromFor/ForShun_InVivo/Rec_Upstream_SNr_4_250616_500ms_5mW_061625001",
+# ]
+# session_folders = []
 
 if not session_folders:
     print("No sessions selected. Exiting.")
@@ -39,33 +41,81 @@ if not session_params:
 bin_size = 25           # in ms
 time_range = (-1,5)     # in sec
 xaxis = ndap.get_time_axis(time_range, bin_size_ms=bin_size)
-trial_conditions = [
-    'reward_right_laser', 'reward_left_laser', 'nonreward_right_laser', 'nonreward_left_laser',
+laser_conditions = [
+    'reward_right_laser', 'reward_left_laser', 'nonreward_right_laser', 'nonreward_left_laser'
+]
+control_conditions = [
     'reward_right_control', 'reward_left_control', 'nonreward_right_control', 'nonreward_left_control'
 ]
 
+# Spike sorting group to analyze, in order of preference.
+# Spikes live in spikeinterface/03_analyzers/<group>/sorting/spikes.npy
+analyzer_groups = ['good_excellent_units', 'quality_thresholded', 'good', 'full', 'mua']
+
+def find_spikes_file(session_folder):
+    """Return the spikes.npy of the first available analyzer group, else None"""
+    for group in analyzer_groups:
+        path = os.path.join(session_folder, 'spikeinterface', '03_analyzers',
+                            group, 'sorting', 'spikes.npy')
+        if os.path.isfile(path):
+            return path, group
+    return None, None
+
 # Run analysis for each session
+skipped_sessions = []
 for session_folder in session_folders:
     session_id = os.path.basename(session_folder)
     
     # Get session-specific parameters
     params = session_params[session_id]
+    has_laser = params['has_laser']
     laser_onset = params['laser_onset']
     laser_duration = params['laser_duration']
     trial_range = params['trial_range']
     save_folder = params['save_folder']
     
     print(f"Analyzing session: {session_id}")
-    print(f"  Laser onset: {laser_onset}s, Duration: {laser_duration}s")
     print(f"  Trial range: {trial_range}")
     print(f"  Save folder: {save_folder}")
 
+    # ####################### Check required files ########################
+    # Skip sessions missing behavior or spike data instead of crashing the batch
+    trial_csv = ndap.find_behavior_file(session_folder, 'trial_data.csv', required=False)
+    spikes_path, analyzer_group = find_spikes_file(session_folder)
+
+    if trial_csv is None or spikes_path is None:
+        missing = []
+        if trial_csv is None:
+            missing.append('trial_data.csv')
+        if spikes_path is None:
+            missing.append('spikes.npy')
+        print(f"  Skipping {session_id}: missing {', '.join(missing)}")
+        skipped_sessions.append((session_id, ', '.join(missing)))
+        continue
+
     # ####################### Extract behavior ########################
     # Load trial data from csv
-    print('Loading trial data...')
+    print(f'Loading trial data from {trial_csv}...')
     
-    # Get trial table and event times
+    # Get trial table
     trial_data_df = ndap.get_trial_table(session_folder, trial_range)
+
+    # Skip laser conditions if this session has no laser trials.
+    # The GUI checkbox decides; the trial table is a safety net against mislabelling.
+    laser_in_data = bool('IsLaserTrial' in trial_data_df.columns
+                         and (trial_data_df['IsLaserTrial'] == 1).any())
+    if has_laser and not laser_in_data:
+        print("  Marked as a laser session but no laser trials found in trial table")
+        has_laser = False
+
+    if has_laser:
+        trial_conditions = laser_conditions + control_conditions
+        print(f"  Laser onset: {laser_onset}s, Duration: {laser_duration}s")
+    else:
+        trial_conditions = control_conditions
+        print("  No laser trials found: skipping laser conditions")
+
+    # Get event times
     event_times = ndap.get_trial_times(trial_data_df, trial_conditions)
 
     # Save everything to a single data.h5 file
@@ -82,13 +132,15 @@ for session_folder in session_folders:
         'session_name': session_id,
         'subject_id': 'SL326', # to be change later
         'recording_location': 'DCN',
-        'laser_onset': laser_onset,
-        'laser_duration': laser_duration,
+        'has_laser': has_laser,
         'trial_range': str(trial_range),
         'bin_size': bin_size,
         'time_range': str(time_range),
         'trial_conditions': trial_conditions
     }
+    if has_laser:
+        metadata['laser_onset'] = laser_onset
+        metadata['laser_duration'] = laser_duration
     ndap.save_variables({'metadata': metadata}, data_file, key='metadata')
 
 
@@ -101,7 +153,7 @@ for session_folder in session_folders:
     # mat_data = sio.loadmat(laser_times_path)
 
     # Load spikes
-    spikes_path = rf"{session_folder}/spikeinterface/analyzer/sorting/spikes.npy"
+    print(f"  Using '{analyzer_group}' analyzer group")
     spikes_raw = np.load(spikes_path, allow_pickle=True)
     spikes = np.stack([spikes_raw['sample_index'], spikes_raw['unit_index'], spikes_raw['segment_index']], axis=1)
     print('Finished: load spikes')
@@ -140,3 +192,9 @@ for session_folder in session_folders:
     print(f'\nAll data saved to {save_folder}:')
     print(f'  - Trial table, event times, and metadata: data.h5')
     print(f'  - Aligned spikes: aligned_spikes.h5')
+
+# Report sessions that could not be analyzed
+if skipped_sessions:
+    print(f'\nSkipped {len(skipped_sessions)} of {len(session_folders)} session(s):')
+    for session_id, missing in skipped_sessions:
+        print(f'  - {session_id}: missing {missing}')

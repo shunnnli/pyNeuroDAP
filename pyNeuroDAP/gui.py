@@ -5,7 +5,58 @@ GUI utilities for NeuroDAP package
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import os
+import sys
+import subprocess
 from datetime import datetime
+
+
+def _applescript_quote(text):
+    """Quote a Python string for embedding in an AppleScript literal"""
+    escaped = str(text).replace('\\', '\\\\').replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _select_folders_native(title, default_dir):
+    """
+    Open the native macOS folder chooser, which (unlike tkinter's
+    askdirectory) allows selecting several folders at once.
+
+    Parameters:
+    - title: str, prompt shown in the dialog
+    - default_dir: str, folder the dialog opens in
+
+    Returns:
+    - list of str, selected folder paths ([] if cancelled)
+    - None if the native dialog is unavailable (non-macOS, or osascript failed),
+      so the caller can fall back to tkinter
+    """
+    if sys.platform != 'darwin':
+        return None
+
+    script = (
+        f'set chosen to choose folder with prompt {_applescript_quote(title)} '
+        f'default location POSIX file {_applescript_quote(default_dir)} '
+        'with multiple selections allowed\n'
+        'set out to ""\n'
+        'repeat with f in chosen\n'
+        '\tset out to out & POSIX path of f & linefeed\n'
+        'end repeat\n'
+        'return out'
+    )
+
+    try:
+        result = subprocess.run(['osascript', '-e', script],
+                                capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    if result.returncode != 0:
+        # -128 is the AppleScript code for "user cancelled"
+        if '-128' in (result.stderr or ''):
+            return []
+        return None
+
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 def generate_default_save_path(session_folder):
     """Generate default save path: session_folder/results-YYMMDD"""
@@ -26,15 +77,17 @@ def create_session_gui(session_folders):
     - session_folders: list, paths to session folders
     
     Returns:
-    - session_params: dict, parameters for each session
+    - session_params: dict, parameters for each session. Each entry holds
+      'has_laser' (bool), 'laser_onset', 'laser_duration' (None when
+      has_laser is False), 'trial_range' and 'save_folder'.
     """
     root = tk.Tk()
     root.title("Session Parameters")
     
     # Calculate optimal window size based on number of sessions
     n_sessions = len(session_folders)
-    window_width = 900
-    window_height = 150 + (n_sessions * 50) + 160  # Base height + session rows + buttons/instructions (increased for extra line)
+    window_width = 1000
+    window_height = 150 + (n_sessions * 50) + 190  # Base height + session rows + buttons/instructions (increased for extra line)
     
     # Ensure minimum and maximum sizes
     window_height = max(400, min(800, window_height))
@@ -54,8 +107,14 @@ def create_session_gui(session_folders):
                 session_id = os.path.basename(session_folder)
                 
                 # Get values
-                laser_onset = float(laser_entries[i].get())
-                laser_duration = float(duration_entries[i].get())
+                has_laser = bool(laser_vars[i].get())
+                if has_laser:
+                    laser_onset = float(laser_entries[i].get())
+                    laser_duration = float(duration_entries[i].get())
+                else:
+                    # No laser trials: laser timing is meaningless for this session
+                    laser_onset = None
+                    laser_duration = None
                 trial_start_raw = trial_start_entries[i].get().strip().lower()
                 trial_end_raw = trial_end_entries[i].get().strip().lower()
                 
@@ -84,12 +143,13 @@ def create_session_gui(session_folders):
                     except ValueError:
                         raise ValueError(f"Invalid trial range for {session_id}. Use 'all' or valid numbers.")
                 
-                # Validate other parameters
-                if laser_duration <= 0:
+                # Validate other parameters (laser fields only apply to laser sessions)
+                if has_laser and laser_duration <= 0:
                     raise ValueError(f"Laser duration must be positive for {session_id}")
                 
                 # Store parameters
                 session_params[session_id] = {
+                    'has_laser': has_laser,
                     'laser_onset': laser_onset,
                     'laser_duration': laser_duration,
                     'trial_range': trial_range,
@@ -106,9 +166,18 @@ def create_session_gui(session_folders):
             messagebox.showerror("Error", f"Unexpected error: {e}")
             return
     
+    def toggle_laser_fields(i):
+        """Enable laser timing fields only when the session has laser trials"""
+        state = 'normal' if laser_vars[i].get() else 'disabled'
+        laser_entries[i].config(state=state)
+        duration_entries[i].config(state=state)
+
     def set_defaults():
         """Set default values for all sessions"""
         for i in range(len(session_folders)):
+            laser_vars[i].set(True)
+            toggle_laser_fields(i)
+
             laser_entries[i].delete(0, tk.END)
             laser_entries[i].insert(0, "0.0")
             
@@ -133,29 +202,31 @@ def create_session_gui(session_folders):
     # Configure grid weights for better resizing
     root.columnconfigure(0, weight=1)
     root.rowconfigure(0, weight=1)
-    main_frame.columnconfigure(1, weight=1)
     main_frame.columnconfigure(2, weight=1)
     main_frame.columnconfigure(3, weight=1)
     main_frame.columnconfigure(4, weight=1)
     main_frame.columnconfigure(5, weight=1)
+    main_frame.columnconfigure(6, weight=1)
     
     # Title
     title_label = ttk.Label(main_frame, text="Set Parameters for Each Session", 
                            font=('Arial', 14, 'bold'))
-    title_label.grid(row=0, column=0, columnspan=6, pady=(0, 20))
+    title_label.grid(row=0, column=0, columnspan=7, pady=(0, 20))
     
     # Headers
     ttk.Label(main_frame, text="Session", font=('Arial', 11, 'bold')).grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
-    ttk.Label(main_frame, text="Laser Onset (s)", font=('Arial', 11, 'bold')).grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
-    ttk.Label(main_frame, text="Laser Duration (s)", font=('Arial', 11, 'bold')).grid(row=1, column=2, padx=5, pady=5, sticky=tk.W)
-    ttk.Label(main_frame, text="Trial Start", font=('Arial', 11, 'bold')).grid(row=1, column=3, padx=5, pady=5, sticky=tk.W)
-    ttk.Label(main_frame, text="Trial End", font=('Arial', 11, 'bold')).grid(row=1, column=4, padx=5, pady=5, sticky=tk.W)
-    ttk.Label(main_frame, text="Save Folder", font=('Arial', 11, 'bold')).grid(row=1, column=5, padx=5, pady=5, sticky=tk.W)
+    ttk.Label(main_frame, text="Has Laser", font=('Arial', 11, 'bold')).grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
+    ttk.Label(main_frame, text="Laser Onset (s)", font=('Arial', 11, 'bold')).grid(row=1, column=2, padx=5, pady=5, sticky=tk.W)
+    ttk.Label(main_frame, text="Laser Duration (s)", font=('Arial', 11, 'bold')).grid(row=1, column=3, padx=5, pady=5, sticky=tk.W)
+    ttk.Label(main_frame, text="Trial Start", font=('Arial', 11, 'bold')).grid(row=1, column=4, padx=5, pady=5, sticky=tk.W)
+    ttk.Label(main_frame, text="Trial End", font=('Arial', 11, 'bold')).grid(row=1, column=5, padx=5, pady=5, sticky=tk.W)
+    ttk.Label(main_frame, text="Save Folder", font=('Arial', 11, 'bold')).grid(row=1, column=6, padx=5, pady=5, sticky=tk.W)
     
     # Instructions for trial range
     # ttk.Label(main_frame, text="(use 'all' for all trials)", font=('Arial', 9, 'italic')).grid(row=1, column=3, columnspan=2, padx=5, pady=(0, 5), sticky=tk.W)
     
     # Create entry fields for each session
+    laser_vars = []
     laser_entries = []
     duration_entries = []
     trial_start_entries = []
@@ -170,28 +241,35 @@ def create_session_gui(session_folders):
         display_name = session_id[:30] + "..." if len(session_id) > 30 else session_id
         ttk.Label(main_frame, text=display_name, font=('Arial', 9)).grid(row=row, column=0, padx=5, pady=2, sticky=tk.W)
         
+        # Has laser trials (default: checked)
+        laser_var = tk.BooleanVar(value=True)
+        laser_vars.append(laser_var)
+        laser_check = ttk.Checkbutton(main_frame, variable=laser_var,
+                                      command=lambda idx=i: toggle_laser_fields(idx))
+        laser_check.grid(row=row, column=1, padx=5, pady=2)
+        
         # Laser onset (default: 0.0)
         laser_entry = ttk.Entry(main_frame, width=15)
         laser_entry.insert(0, "0.0")
-        laser_entry.grid(row=row, column=1, padx=5, pady=2, sticky=(tk.W, tk.E))
+        laser_entry.grid(row=row, column=2, padx=5, pady=2, sticky=(tk.W, tk.E))
         laser_entries.append(laser_entry)
         
         # Laser duration (default: 0.5)
         duration_entry = ttk.Entry(main_frame, width=15)
         duration_entry.insert(0, "0.5")
-        duration_entry.grid(row=row, column=2, padx=5, pady=2, sticky=(tk.W, tk.E))
+        duration_entry.grid(row=row, column=3, padx=5, pady=2, sticky=(tk.W, tk.E))
         duration_entries.append(duration_entry)
         
         # Trial start (default: all trials)
         trial_start_entry = ttk.Entry(main_frame, width=15)
         trial_start_entry.insert(0, "all")
-        trial_start_entry.grid(row=row, column=3, padx=5, pady=2, sticky=(tk.W, tk.E))
+        trial_start_entry.grid(row=row, column=4, padx=5, pady=2, sticky=(tk.W, tk.E))
         trial_start_entries.append(trial_start_entry)
         
         # Trial end (default: all trials)
         trial_end_entry = ttk.Entry(main_frame, width=15)
         trial_end_entry.insert(0, "all")
-        trial_end_entry.grid(row=row, column=4, padx=5, pady=2, sticky=(tk.W, tk.E))
+        trial_end_entry.grid(row=row, column=5, padx=5, pady=2, sticky=(tk.W, tk.E))
         trial_end_entries.append(trial_end_entry)
         
         # Save folder (default: results-YYMMDD)
@@ -199,12 +277,12 @@ def create_session_gui(session_folders):
         results_folder = f"results-{current_date}"
         save_folder_entry = ttk.Entry(main_frame, width=30)
         save_folder_entry.insert(0, results_folder)
-        save_folder_entry.grid(row=row, column=5, padx=5, pady=2, sticky=(tk.W, tk.E))
+        save_folder_entry.grid(row=row, column=6, padx=5, pady=2, sticky=(tk.W, tk.E))
         save_folder_entries.append(save_folder_entry)
     
     # Button frame
     button_frame = ttk.Frame(main_frame)
-    button_frame.grid(row=len(session_folders)+2, column=0, columnspan=6, pady=20)
+    button_frame.grid(row=len(session_folders)+2, column=0, columnspan=7, pady=20)
     
     # Buttons
     defaults_btn = ttk.Button(button_frame, text="Set Defaults", command=set_defaults)
@@ -218,15 +296,19 @@ def create_session_gui(session_folders):
     
     # Instructions
     ttk.Label(main_frame, text="Set parameters for each session, then click Submit & Continue", 
-              font=('Arial', 10, 'italic')).grid(row=len(session_folders)+3, column=0, columnspan=6, pady=5)
+              font=('Arial', 10, 'italic')).grid(row=len(session_folders)+3, column=0, columnspan=7, pady=5)
     
     # Additional trial range instructions
     ttk.Label(main_frame, text="Tip: Use 'all' in Trial Start/End to analyze all available trials", 
-              font=('Arial', 9, 'italic'), foreground='blue').grid(row=len(session_folders)+4, column=0, columnspan=6, pady=2)
+              font=('Arial', 9, 'italic'), foreground='blue').grid(row=len(session_folders)+4, column=0, columnspan=7, pady=2)
     
     # Save path instructions
     ttk.Label(main_frame, text="Save folder: Enter folder name only (e.g., results-250820). Full path: session_folder/folder_name", 
-              font=('Arial', 9, 'italic'), foreground='green').grid(row=len(session_folders)+5, column=0, columnspan=6, pady=2)
+              font=('Arial', 9, 'italic'), foreground='green').grid(row=len(session_folders)+5, column=0, columnspan=7, pady=2)
+
+    # Laser checkbox instructions
+    ttk.Label(main_frame, text="Has Laser: uncheck for sessions without laser trials (laser timing fields are then ignored)",
+              font=('Arial', 9, 'italic'), foreground='#8000a0').grid(row=len(session_folders)+6, column=0, columnspan=7, pady=2)
     
     # Start GUI
     root.mainloop()
@@ -333,20 +415,149 @@ def create_parameter_gui(parameters, title="Parameter Settings"):
     
     return param_values
 
-def select_sessions(title="Select Session Folders"):
+def select_sessions(title="Select Session Folders", default_path=None):
+    """
+    Select one or more session folders using a GUI.
+
+    Folders are added one at a time (tkinter cannot multi-select directories),
+    or in bulk by picking a parent folder and taking all of its subfolders.
+
+    Parameters:
+    - title: str, window title
+    - default_path: str or None, folder the browser opens in
+      (falls back to the current directory if None or unreachable)
+
+    Returns:
+    - session_folders: list of str, selected folder paths (empty if cancelled)
+    """
+    selected_folders = []
+    # Fall back to the current directory if the default path is not mounted
+    default_dir = default_path if default_path and os.path.isdir(default_path) else os.getcwd()
+    # Remembers where the last browse happened so repeated adds stay in place
+    last_dir = {'path': default_dir}
+
     root = tk.Tk()
-    root.withdraw()  # Hide the main Tkinter window
+    root.title(title)
+    root.geometry("800x450")
+    root.resizable(True, True)
 
+    main_frame = ttk.Frame(root, padding="15")
+    main_frame.pack(fill=tk.BOTH, expand=True)
 
-    file_paths = filedialog.askopenfilenames(
-        title="Select Multiple Files",
-        filetypes=(("Text files", "*.txt"), ("All files", "*.*")),
-        multiple=True
-    )
+    ttk.Label(main_frame, text=title, font=('Arial', 14, 'bold')).pack(pady=(0, 5))
+    ttk.Label(
+        main_frame,
+        text="Add one or more session folders, or add every subfolder of a parent folder.",
+        font=('Arial', 10)
+    ).pack(pady=(0, 2))
+    ttk.Label(
+        main_frame,
+        text=f"Browsing starts in: {default_dir}",
+        font=('Arial', 9, 'italic'), foreground='green'
+    ).pack(pady=(0, 10))
 
-    if file_paths:
-        print("Selected files:")
-        for path in file_paths:
-            print(path)
-    else:
-        print("No files selected.")
+    # List of currently selected folders
+    list_frame = ttk.Frame(main_frame)
+    list_frame.pack(fill=tk.BOTH, expand=True)
+
+    scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL)
+    listbox = tk.Listbox(list_frame, selectmode=tk.EXTENDED, yscrollcommand=scrollbar.set,
+                         font=('Arial', 10), activestyle='none')
+    scrollbar.config(command=listbox.yview)
+    scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+    listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    count_label = ttk.Label(main_frame, text="0 folder(s) selected", font=('Arial', 10))
+    count_label.pack(pady=(5, 0))
+
+    def refresh_list():
+        listbox.delete(0, tk.END)
+        for folder in selected_folders:
+            listbox.insert(tk.END, folder)
+        count_label.config(text=f"{len(selected_folders)} folder(s) selected")
+
+    def add_folders(folders):
+        """Append folders, skipping ones already in the list"""
+        added = 0
+        for folder in folders:
+            folder = os.path.normpath(folder)
+            if folder not in selected_folders:
+                selected_folders.append(folder)
+                added += 1
+        refresh_list()
+        return added
+
+    def add_folder():
+        # Native macOS dialog allows picking several folders at once;
+        # tkinter's askdirectory is one-at-a-time, so it is only the fallback
+        folders = _select_folders_native("Select session folder(s)", last_dir['path'])
+        if folders is None:
+            folder = filedialog.askdirectory(title="Select a session folder",
+                                             initialdir=last_dir['path'])
+            folders = [folder] if folder else []
+        if not folders:
+            return
+
+        last_dir['path'] = os.path.dirname(os.path.normpath(folders[-1]))
+        if add_folders(folders) == 0:
+            messagebox.showinfo("Already added",
+                                "Those folders are already in the list.")
+
+    def add_subfolders():
+        parent = filedialog.askdirectory(title="Select a parent folder (adds all subfolders)",
+                                         initialdir=last_dir['path'])
+        if not parent:
+            return
+        last_dir['path'] = os.path.normpath(parent)
+        subfolders = sorted(
+            os.path.join(parent, name) for name in os.listdir(parent)
+            if os.path.isdir(os.path.join(parent, name)) and not name.startswith('.')
+        )
+        if not subfolders:
+            messagebox.showwarning("No subfolders", f"No subfolders found in:\n{parent}")
+            return
+        added = add_folders(subfolders)
+        messagebox.showinfo(
+            "Subfolders added",
+            f"Added {added} new folder(s) out of {len(subfolders)} found."
+        )
+
+    def remove_selected():
+        for index in sorted(listbox.curselection(), reverse=True):
+            selected_folders.pop(index)
+        refresh_list()
+
+    def clear_all():
+        selected_folders.clear()
+        refresh_list()
+
+    def on_done():
+        if not selected_folders:
+            if not messagebox.askyesno("No folders selected", "No folders selected. Continue anyway?"):
+                return
+        root.quit()
+        root.destroy()
+
+    def on_cancel():
+        selected_folders.clear()
+        root.quit()
+        root.destroy()
+
+    # Buttons
+    button_frame = ttk.Frame(main_frame)
+    button_frame.pack(pady=15)
+
+    ttk.Button(button_frame, text="Add Folders...", command=add_folder).pack(side=tk.LEFT, padx=5)
+    ttk.Button(button_frame, text="Add All Subfolders...", command=add_subfolders).pack(side=tk.LEFT, padx=5)
+    ttk.Button(button_frame, text="Remove Selected", command=remove_selected).pack(side=tk.LEFT, padx=5)
+    ttk.Button(button_frame, text="Clear All", command=clear_all).pack(side=tk.LEFT, padx=5)
+    ttk.Button(button_frame, text="Done", command=on_done).pack(side=tk.LEFT, padx=15)
+    ttk.Button(button_frame, text="Cancel", command=on_cancel).pack(side=tk.LEFT, padx=5)
+
+    # Treat the window close button as Cancel
+    root.protocol("WM_DELETE_WINDOW", on_cancel)
+
+    refresh_list()
+    root.mainloop()
+
+    return selected_folders

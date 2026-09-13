@@ -282,7 +282,11 @@ def save_variables(variables_dict, filepath, key='variables'):
                     data_array = np.array(var_data)
                     if data_array.dtype.kind in ['U', 'S']:  # String arrays
                         data_array = data_array.astype('S')
-                    main_group.create_dataset(var_name, data=data_array, compression='gzip')
+                    if data_array.size == 0:
+                        # gzip implies chunking, which HDF5 rejects for empty arrays
+                        main_group.create_dataset(var_name, data=data_array)
+                    else:
+                        main_group.create_dataset(var_name, data=data_array, compression='gzip')
                 except ValueError:
                     # Handle inhomogeneous lists
                     main_group.attrs[var_name] = str(var_data)
@@ -445,6 +449,10 @@ def load_session_data(filepath, groups='all', lazy=False, verbose=False):
 
 def _default_rate_chunks(shape):
     # (units, trials, timebins) tuned for time-window slices & trial concat
+    # HDF5 requires every chunk dimension to be positive, so empty arrays
+    # (e.g. a condition with no trials) cannot be chunked at all
+    if len(shape) != 3 or any(dim == 0 for dim in shape):
+        return None
     u, t, b = shape
     return (min(64, u), min(128, t), min(128, b))
 
@@ -460,19 +468,29 @@ def _save_dict_recursive(group, data_dict):
                 arr = np.asarray(value, dtype=np.float32)
                 if key in group:
                     del group[key]
-                group.create_dataset(
-                    key, data=arr,
-                    chunks=_default_rate_chunks(arr.shape),
-                    compression='gzip', compression_opts=4,
-                    shuffle=True, fletcher32=True
-                )
+                chunks = _default_rate_chunks(arr.shape)
+                if chunks is None:
+                    # Empty array: store contiguous, chunking/filters need
+                    # every dimension to be positive
+                    group.create_dataset(key, data=arr)
+                else:
+                    group.create_dataset(
+                        key, data=arr,
+                        chunks=chunks,
+                        compression='gzip', compression_opts=4,
+                        shuffle=True, fletcher32=True
+                    )
                 continue
             # ---- default behavior (your existing logic) ----
             try:
                 data_array = np.array(value)
                 if data_array.dtype.kind in ['U', 'S']:
                     data_array = data_array.astype('S')
-                group.create_dataset(key, data=data_array, compression='gzip')
+                if data_array.size == 0:
+                    # gzip implies chunking, which HDF5 rejects for empty arrays
+                    group.create_dataset(key, data=data_array)
+                else:
+                    group.create_dataset(key, data=data_array, compression='gzip')
             except ValueError:
                 # inhomogeneous list fallback (your current approach)
                 list_group = group.create_group(key)
