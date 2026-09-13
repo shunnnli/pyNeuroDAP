@@ -127,13 +127,14 @@ def save_dataframe(df, filepath, key='trial_table', mode='a', append=False):
     return str(filepath)
 
 
-def load_dataframe(filepath, key='trial_table'):
+def load_dataframe(filepath, key='trial_table', verbose=False):
     """
     Load pandas DataFrame from HDF5 file using h5py directly
     
     Parameters:
     - filepath: str or Path, path to HDF5 file
     - key: str, key name for the data
+    - verbose: bool, print a message on success
     
     Returns:
     - df: pandas DataFrame
@@ -145,7 +146,8 @@ def load_dataframe(filepath, key='trial_table'):
     
     df = pd.read_hdf(filepath, key=key)
 
-    print(f"DataFrame loaded from {filepath}")
+    if verbose:
+        print(f"DataFrame loaded from {filepath}")
     return df
 
 
@@ -397,9 +399,20 @@ def load_session_data(filepath, groups='all', lazy=False, verbose=False):
         'salt_results': lambda: load_variables(filepath, key='salt_results', verbose=verbose),
         'trial_table':  lambda: load_dataframe(filepath, key='trial_table', verbose=verbose),
     }
+    def _unwrap(name, value):
+        """
+        save_variables({'metadata': metadata}, key='metadata') nests the dict
+        under its own name. Drop that redundant level so callers can use
+        data['metadata']['bin_size'] directly.
+        """
+        if (isinstance(value, dict) and set(value.keys()) == {name}
+                and isinstance(value[name], dict)):
+            return value[name]
+        return value
+
     for key, loader in _singleton_loaders.items():
         if key in all_keys and _want(key):
-            session_data[key] = loader()
+            session_data[key] = _unwrap(key, loader())
 
     # --- spikes_<event> : lazy-loaded aligned spike dicts ---
     if _want('aligned_spikes'):
