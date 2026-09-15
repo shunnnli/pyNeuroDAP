@@ -319,7 +319,11 @@ def get_trial_times(trial_data_df, trial_conditions):
     - trial_conditions: list, trial condition strings
     
     Returns:
-    - event_times: dict, event times for each condition
+    - event_times: dict, event times for each condition, plus 'trial_indices'
+      giving the positional index in trial_data_df of every stored event. The
+      per-condition order matches the event-time arrays (and therefore the
+      trial axis of anything aligned to them), so per-trial covariates can be
+      joined with trial_data_df.iloc[...].
     """
     print('Extracting behavior event times...')
     # Initialize dicts for trial start, choice lick, second lick, and last lick times for each trial condition
@@ -327,9 +331,11 @@ def get_trial_times(trial_data_df, trial_conditions):
     choice_lick_times   = {cond: [] for cond in trial_conditions}
     second_lick_times   = {cond: [] for cond in trial_conditions}
     last_lick_times     = {cond: [] for cond in trial_conditions}
+    # Which row of trial_data_df each stored event came from
+    trial_indices       = {cond: [] for cond in trial_conditions}
 
     # select trials
-    for _, trial in trial_data_df.iterrows(): 
+    for trial_position, (_, trial) in enumerate(trial_data_df.iterrows()):
 
         try:
             trial_number = trial['TrialNumber']
@@ -352,6 +358,7 @@ def get_trial_times(trial_data_df, trial_conditions):
                     cond = 'reward_left_control' if is_rewarded else 'nonreward_left_control'
             # Store trial start time in the correct list
             trial_start_times[cond].append(trial_time)
+            trial_indices[cond].append(trial_position)
 
             # Lick timings
             # Extract lick times from the trial
@@ -380,13 +387,15 @@ def get_trial_times(trial_data_df, trial_conditions):
         choice_lick_times[cond] = np.array(choice_lick_times[cond])
         second_lick_times[cond] = np.array(second_lick_times[cond])
         last_lick_times[cond] = np.array(last_lick_times[cond])
+        trial_indices[cond] = np.array(trial_indices[cond], dtype=int)
 
     # package event times
     event_times = {
         'trial_start_times': trial_start_times,
         'choice_lick_times': choice_lick_times,
         'second_lick_times': second_lick_times,
-        'last_lick_times': last_lick_times
+        'last_lick_times': last_lick_times,
+        'trial_indices': trial_indices
     }
 
     return event_times
