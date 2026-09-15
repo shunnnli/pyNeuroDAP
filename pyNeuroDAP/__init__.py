@@ -59,6 +59,7 @@ except ImportError:
 from .trials import (
     get_onset_times,
     find_behavior_file,
+    get_laser_timing,
     get_trial_table,
     get_trial_times,
     get_trial_data,
@@ -99,6 +100,7 @@ from .gui import (
     create_session_gui,
     create_parameter_gui,
     generate_default_save_path,
+    default_results_folder,
     select_sessions
 )
 
@@ -166,6 +168,7 @@ __all__ = [
     # Trial management
     'get_onset_times',
     'find_behavior_file',
+    'get_laser_timing',
     'get_trial_table',
     'get_trial_times',
     'get_trial_data',
@@ -203,6 +206,7 @@ __all__ = [
     'create_session_gui',
     'create_parameter_gui',
     'generate_default_save_path',
+    'default_results_folder',
     'select_sessions',
     
     # MATLAB file utilities

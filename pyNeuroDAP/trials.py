@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import warnings
 
 import numpy as np
@@ -140,6 +141,109 @@ def find_behavior_file(session_folder, filename='trial_data.csv', required=True)
             f"'{os.path.basename(session_folder.rstrip(os.sep))}'.\nLooked in:\n{searched}"
         )
     return None
+
+
+def get_laser_timing(session_folder=None, trial_table=None, tolerance_ms=25):
+    """
+    Extract laser onset and duration for a session, so they need not be typed in.
+
+    Sources, in order of preference:
+    - onset: measured per-trial delay ('DetectedLaserDelay_s'), then the
+      configured delay ('LaserDelay', or 'LaserStart_s' - 'TimeStart'), then
+      behavior/laser_config.json
+    - duration: configured width ('LaserWidth_s'), then the measured width
+      ('DetectedLaserWidth_s'), then behavior/laser_config.json
+
+    The configured delay is not preferred for onset because it records the
+    *intended* timing and can be wrong; the measured width is not preferred for
+    duration because threshold-based detection is noisier than the configured
+    value. Disagreements larger than tolerance_ms are reported in 'warnings'.
+
+    Parameters:
+    - session_folder: str or None, session path (needed for laser_config.json
+      and to load the trial table when one is not supplied)
+    - trial_table: DataFrame or None, an already-loaded trial table
+    - tolerance_ms: float, disagreement above which a warning is recorded
+
+    Returns:
+    - dict with has_laser, n_laser_trials, laser_onset, laser_duration,
+      onset_source, duration_source and warnings
+    """
+    result = {'has_laser': False, 'n_laser_trials': 0,
+              'laser_onset': None, 'laser_duration': None,
+              'onset_source': None, 'duration_source': None, 'warnings': []}
+
+    if trial_table is None:
+        if session_folder is None:
+            raise ValueError("Provide session_folder or trial_table")
+        csv_path = find_behavior_file(session_folder, 'trial_data.csv', required=False)
+        if csv_path is None:
+            result['warnings'].append('no trial_data.csv found')
+            return result
+        trial_table = pd.read_csv(csv_path, low_memory=False)
+
+    if 'IsLaserTrial' not in trial_table.columns:
+        # Control sessions do not carry the column at all
+        result['warnings'].append('no IsLaserTrial column: treating as a control session')
+        return result
+    laser = trial_table[trial_table['IsLaserTrial'] == 1]
+    result['n_laser_trials'] = int(len(laser))
+    result['has_laser'] = bool(len(laser) > 0)
+    if not result['has_laser']:
+        return result
+
+    def median_of(frame, column):
+        if column not in frame.columns:
+            return None
+        values = pd.to_numeric(frame[column], errors='coerce').dropna()
+        return float(values.median()) if len(values) else None
+
+    # ---- onset ----
+    measured = median_of(laser, 'DetectedLaserDelay_s')
+    configured = median_of(laser, 'LaserDelay')
+    if configured is None and {'LaserStart_s', 'TimeStart'}.issubset(laser.columns):
+        starts = pd.to_numeric(laser['LaserStart_s'], errors='coerce')
+        t0 = pd.to_numeric(laser['TimeStart'], errors='coerce')
+        diff = (starts - t0).dropna()
+        configured = float(diff.median()) if len(diff) else None
+
+    if measured is not None:
+        result['laser_onset'], result['onset_source'] = measured, 'measured (DetectedLaserDelay_s)'
+        if configured is not None and abs(configured - measured) > tolerance_ms / 1000:
+            result['warnings'].append(
+                f"configured delay {configured:.3f}s disagrees with measured {measured:.3f}s")
+    elif configured is not None:
+        result['laser_onset'], result['onset_source'] = configured, 'configured (LaserDelay)'
+
+    # ---- duration ----
+    cfg_width = median_of(laser, 'LaserWidth_s')
+    det_width = median_of(laser, 'DetectedLaserWidth_s')
+    if cfg_width is not None:
+        result['laser_duration'], result['duration_source'] = cfg_width, 'configured (LaserWidth_s)'
+        if det_width is not None and abs(det_width - cfg_width) > tolerance_ms / 1000:
+            result['warnings'].append(
+                f"measured width {det_width:.3f}s disagrees with configured {cfg_width:.3f}s")
+    elif det_width is not None:
+        result['laser_duration'], result['duration_source'] = det_width, 'measured (DetectedLaserWidth_s)'
+
+    # ---- fall back to the rig config file ----
+    if (result['laser_onset'] is None or result['laser_duration'] is None) and session_folder:
+        cfg_path = find_behavior_file(session_folder, 'laser_config.json', required=False)
+        if cfg_path is not None:
+            try:
+                with open(cfg_path) as f:
+                    lasers = json.load(f).get('lasers', [])
+                if lasers:
+                    if result['laser_onset'] is None and 'delay_ms' in lasers[0]:
+                        result['laser_onset'] = float(lasers[0]['delay_ms']) / 1000
+                        result['onset_source'] = 'laser_config.json'
+                    if result['laser_duration'] is None and 'width_ms' in lasers[0]:
+                        result['laser_duration'] = float(lasers[0]['width_ms']) / 1000
+                        result['duration_source'] = 'laser_config.json'
+            except (ValueError, OSError) as err:
+                result['warnings'].append(f'could not read laser_config.json: {err}')
+
+    return result
 
 
 def get_trial_table(session_folder, trial_range='all'):

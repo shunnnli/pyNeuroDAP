@@ -58,23 +58,30 @@ def _select_folders_native(title, default_dir):
 
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
-def generate_default_save_path(session_folder):
-    """Generate default save path: session_folder/results-YYMMDD"""
-    # Get current date in YYMMDD format
+def default_results_folder(suffix=None):
+    """Default results folder name: results-YYMMDD, or results-YYMMDD-<suffix>"""
     current_date = datetime.now().strftime("%y%m%d")
-    
-    # Create default save path
-    results_folder_name = f"results-{current_date}"
-    default_path = os.path.join(session_folder, results_folder_name)
-    
-    return default_path
+    name = f"results-{current_date}"
+    if suffix:
+        name = f"{name}-{suffix}"
+    return name
 
-def create_session_gui(session_folders):
+
+def generate_default_save_path(session_folder, suffix=None):
+    """Generate default save path: session_folder/results-YYMMDD[-suffix]"""
+    return os.path.join(session_folder, default_results_folder(suffix))
+
+def create_session_gui(session_folders, save_folder_suffix=None, session_defaults=None):
     """
     Create a simple GUI to set parameters for each session
     
     Parameters:
     - session_folders: list, paths to session folders
+    - save_folder_suffix: str or None, appended to the default save folder
+      name (e.g. 'good' gives results-YYMMDD-good)
+    - session_defaults: dict or None, {session_id: {'has_laser', 'laser_onset',
+      'laser_duration'}} used to pre-fill the laser fields (e.g. from
+      ndap.get_laser_timing), so they only need editing to override
     
     Returns:
     - session_params: dict, parameters for each session. Each entry holds
@@ -98,6 +105,18 @@ def create_session_gui(session_folders):
     
     # Store the parameters
     session_params = {}
+    session_defaults = session_defaults or {}
+
+    def defaults_for(session_folder):
+        """Pre-filled laser values for one session, falling back to fixed defaults"""
+        d = session_defaults.get(os.path.basename(session_folder), {})
+        onset = d.get('laser_onset')
+        duration = d.get('laser_duration')
+        return {
+            'has_laser': bool(d.get('has_laser', True)),
+            'laser_onset': '0.0' if onset is None else f"{round(onset, 4):g}",
+            'laser_duration': '0.5' if duration is None else f"{round(duration, 4):g}",
+        }
     
     def validate_and_submit():
         """Validate inputs and collect all parameters"""
@@ -175,14 +194,15 @@ def create_session_gui(session_folders):
     def set_defaults():
         """Set default values for all sessions"""
         for i in range(len(session_folders)):
-            laser_vars[i].set(True)
+            d = defaults_for(session_folders[i])
+            laser_vars[i].set(d['has_laser'])
             toggle_laser_fields(i)
 
             laser_entries[i].delete(0, tk.END)
-            laser_entries[i].insert(0, "0.0")
+            laser_entries[i].insert(0, d['laser_onset'])
             
             duration_entries[i].delete(0, tk.END)
-            duration_entries[i].insert(0, "0.5")
+            duration_entries[i].insert(0, d['laser_duration'])
             
             trial_start_entries[i].delete(0, tk.END)
             trial_start_entries[i].insert(0, "all")
@@ -191,9 +211,7 @@ def create_session_gui(session_folders):
             trial_end_entries[i].insert(0, "all")
             
             save_folder_entries[i].delete(0, tk.END)
-            current_date = datetime.now().strftime("%y%m%d")
-            results_folder = f"results-{current_date}"
-            save_folder_entries[i].insert(0, results_folder)
+            save_folder_entries[i].insert(0, default_results_folder(save_folder_suffix))
     
     # Create GUI elements
     main_frame = ttk.Frame(root, padding="15")
@@ -227,6 +245,7 @@ def create_session_gui(session_folders):
     
     # Create entry fields for each session
     laser_vars = []
+    laser_checks = []
     laser_entries = []
     duration_entries = []
     trial_start_entries = []
@@ -241,22 +260,25 @@ def create_session_gui(session_folders):
         display_name = session_id[:30] + "..." if len(session_id) > 30 else session_id
         ttk.Label(main_frame, text=display_name, font=('Arial', 9)).grid(row=row, column=0, padx=5, pady=2, sticky=tk.W)
         
-        # Has laser trials (default: checked)
-        laser_var = tk.BooleanVar(value=True)
+        d = defaults_for(session_folder)
+
+        # Has laser trials (detected from the session when available)
+        laser_var = tk.BooleanVar(value=d['has_laser'])
         laser_vars.append(laser_var)
         laser_check = ttk.Checkbutton(main_frame, variable=laser_var,
                                       command=lambda idx=i: toggle_laser_fields(idx))
         laser_check.grid(row=row, column=1, padx=5, pady=2)
+        laser_checks.append(laser_check)
         
-        # Laser onset (default: 0.0)
+        # Laser onset (pre-filled from the session)
         laser_entry = ttk.Entry(main_frame, width=15)
-        laser_entry.insert(0, "0.0")
+        laser_entry.insert(0, d['laser_onset'])
         laser_entry.grid(row=row, column=2, padx=5, pady=2, sticky=(tk.W, tk.E))
         laser_entries.append(laser_entry)
         
-        # Laser duration (default: 0.5)
+        # Laser duration (pre-filled from the session)
         duration_entry = ttk.Entry(main_frame, width=15)
-        duration_entry.insert(0, "0.5")
+        duration_entry.insert(0, d['laser_duration'])
         duration_entry.grid(row=row, column=3, padx=5, pady=2, sticky=(tk.W, tk.E))
         duration_entries.append(duration_entry)
         
@@ -272,14 +294,16 @@ def create_session_gui(session_folders):
         trial_end_entry.grid(row=row, column=5, padx=5, pady=2, sticky=(tk.W, tk.E))
         trial_end_entries.append(trial_end_entry)
         
-        # Save folder (default: results-YYMMDD)
-        current_date = datetime.now().strftime("%y%m%d")
-        results_folder = f"results-{current_date}"
+        # Save folder (default: results-YYMMDD[-suffix])
         save_folder_entry = ttk.Entry(main_frame, width=30)
-        save_folder_entry.insert(0, results_folder)
+        save_folder_entry.insert(0, default_results_folder(save_folder_suffix))
         save_folder_entry.grid(row=row, column=6, padx=5, pady=2, sticky=(tk.W, tk.E))
         save_folder_entries.append(save_folder_entry)
     
+    # Grey out the laser fields of sessions detected as control
+    for i in range(len(session_folders)):
+        toggle_laser_fields(i)
+
     # Button frame
     button_frame = ttk.Frame(main_frame)
     button_frame.grid(row=len(session_folders)+2, column=0, columnspan=7, pady=20)
@@ -307,7 +331,7 @@ def create_session_gui(session_folders):
               font=('Arial', 9, 'italic'), foreground='green').grid(row=len(session_folders)+5, column=0, columnspan=7, pady=2)
 
     # Laser checkbox instructions
-    ttk.Label(main_frame, text="Has Laser: uncheck for sessions without laser trials (laser timing fields are then ignored)",
+    ttk.Label(main_frame, text="Laser fields are detected from each session's behavior files - edit only to override",
               font=('Arial', 9, 'italic'), foreground='#8000a0').grid(row=len(session_folders)+6, column=0, columnspan=7, pady=2)
     
     # Start GUI
