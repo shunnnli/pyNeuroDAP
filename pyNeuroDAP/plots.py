@@ -752,6 +752,118 @@ def plot_coding_directions(cd_stimulus, cd_choice, ax=None,
     return ax
 
 
+def scatter_with_fit(x, y, ax=None, xlabel=None, ylabel=None,
+                     x_centre=0.0, y_centre=0.0,
+                     color='black', alpha=0.7, edgecolor='none', size=None,
+                     fit=True, fit_color='red', band_alpha=0.2,
+                     groups=None, group_colors=None, title=True,
+                     legend=True, legend_fontsize=8):
+    """
+    Scatter two per-unit measures with a least-squares line, its SEM band and a
+    Spearman correlation.
+
+    The line is an ordinary least-squares fit and the band is the standard error of
+    the fitted mean, s_err * sqrt(1/n + (x - xbar)^2 / Sxx), so it shows where the
+    line itself is uncertain - not where individual points are expected to fall. The
+    reported correlation is Spearman, which is rank-based and therefore unaffected by
+    the saturation a bounded ratio index shows at +-1.
+
+    Pairs where either value is non-finite are dropped. Saturated or otherwise
+    unwanted points should be masked out by the caller, so the correlation reported
+    here always matches the points drawn.
+
+    Parameters:
+    - x, y: array-like, one value per unit; must be the same length
+    - ax: matplotlib axis (defaults to plt.gca())
+    - xlabel, ylabel: axis labels, also used to build the default title
+    - x_centre, y_centre: where to draw the reference lines (e.g. 0.5 for an AUROC)
+    - color, alpha, edgecolor, size: passed to ax.scatter; edgecolor defaults to
+      'none' so overlapping points stay readable
+    - fit: False draws the scatter only, and no line, band or correlation
+    - groups: optional label per point. When given, points are coloured and
+      labelled by group while the fit and the correlation stay pooled over all of
+      them, which is how a multi-session scatter shows whether a pooled correlation
+      is carried by one group.
+    - group_colors: optional {group: color}; defaults to the tab10 cycle
+    - title: True for the default "y vs x / Spearman ..." title, a string for a
+      custom one, or False to leave the title alone
+    - legend: whether to draw the group legend (ignored without groups)
+
+    Returns:
+    - dict with keys rho, pvalue, n, slope, intercept. rho, pvalue, slope and
+      intercept are NaN when there are too few points to fit (n <= 2) or x has no
+      spread.
+    """
+    from scipy.stats import spearmanr
+
+    if ax is None:
+        ax = plt.gca()
+
+    x = np.asarray(x, dtype=float).ravel()
+    y = np.asarray(y, dtype=float).ravel()
+    if x.size != y.size:
+        raise ValueError(f"x and y must be the same length, got {x.size} and {y.size}")
+
+    ok = np.isfinite(x) & np.isfinite(y)
+    xs, ys = x[ok], y[ok]
+    n = xs.size
+
+    if groups is None:
+        ax.scatter(xs, ys, color=color, alpha=alpha, edgecolor=edgecolor, s=size)
+    else:
+        groups = np.asarray(groups).ravel()
+        if groups.size != x.size:
+            raise ValueError(f"groups must have one entry per point, got "
+                             f"{groups.size} for {x.size} points")
+        gs = groups[ok]
+        names = list(dict.fromkeys(gs.tolist()))       # first-seen order
+        cycle = plt.rcParams['axes.prop_cycle'].by_key().get('color', ['C0'])
+        for i, name in enumerate(names):
+            m = gs == name
+            c = (group_colors or {}).get(name, cycle[i % len(cycle)])
+            ax.scatter(xs[m], ys[m], color=c, alpha=alpha, edgecolor=edgecolor,
+                       s=size, label=f'{name} (n={int(m.sum())})')
+        if legend and names:
+            ax.legend(fontsize=legend_fontsize)
+
+    rho = pval = slope = intercept = np.nan
+    if fit and n > 2 and np.ptp(xs) > 0:
+        slope, intercept = np.polyfit(xs, ys, 1)
+        x_fit = np.linspace(xs.min(), xs.max(), 100)
+        y_fit = slope * x_fit + intercept
+        resid = ys - (slope * xs + intercept)
+        s_err = np.sqrt(np.sum(resid ** 2) / (n - 2))
+        Sxx = np.sum((xs - xs.mean()) ** 2)
+        sem = (s_err * np.sqrt(1 / n + (x_fit - xs.mean()) ** 2 / Sxx)
+               if Sxx > 0 else np.full_like(x_fit, np.nan))
+        ax.plot(x_fit, y_fit, color=fit_color, linewidth=2)
+        ax.fill_between(x_fit, y_fit - sem, y_fit + sem,
+                        color=fit_color, alpha=band_alpha, edgecolor='none')
+        rho, pval = spearmanr(xs, ys)
+
+    if y_centre is not None:
+        ax.axhline(y_centre, color='gray', lw=0.8, ls='--', zorder=0)
+    if x_centre is not None:
+        ax.axvline(x_centre, color='gray', lw=0.8, ls='--', zorder=0)
+    if xlabel is not None:
+        ax.set_xlabel(xlabel)
+    if ylabel is not None:
+        ax.set_ylabel(ylabel)
+
+    if isinstance(title, str):
+        ax.set_title(title)
+    elif title:
+        head = f"{ylabel} vs\n{xlabel}" if (xlabel or ylabel) else ""
+        if not fit:
+            ax.set_title(f"{head}\n(n={n})" if head else f"n={n}")
+        elif np.isfinite(rho):
+            ax.set_title(f"{head}\nSpearman rho = {rho:.3f}, p = {pval:.3f} (n={n})")
+        else:
+            ax.set_title(f"{head}\n(too few points)")
+
+    return dict(rho=rho, pvalue=pval, n=int(n), slope=slope, intercept=intercept)
+
+
 def _ecdf(x, weights=None):
     x = np.asarray(x, dtype=float).ravel()
     if weights is None:
