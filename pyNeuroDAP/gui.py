@@ -16,6 +16,41 @@ def _applescript_quote(text):
     return f'"{escaped}"'
 
 
+def _dismiss_window(root):
+    """
+    Take a dialog off the screen from inside a button callback, then leave the loop.
+
+    On macOS, destroy() marks a window gone but Aqua only stops drawing it on the
+    next pass through the event loop - and nothing pumps events once mainloop() has
+    returned. A dialog that only destroys itself in its callback therefore stays
+    visible after the user clicks Done, even though the call has already returned
+    its result. Unmapping the window here and flushing that to the window server is
+    what actually removes it; _destroy_window finishes the teardown afterwards.
+
+    update_idletasks() rather than update(): this runs inside an event handler, and
+    a full update() there would re-enter the handler queue.
+    """
+    try:
+        root.withdraw()
+        root.update_idletasks()
+    except tk.TclError:
+        pass
+    root.quit()
+
+
+def _destroy_window(root):
+    """Finish tearing a dialog down once mainloop() has returned.
+
+    Both steps are optional by then - the window may already be gone - so TclError
+    is expected and ignored rather than raised at the caller.
+    """
+    for step in (root.destroy, root.update):
+        try:
+            step()
+        except tk.TclError:
+            pass
+
+
 def _select_folders_native(title, default_dir):
     """
     Open the native macOS folder chooser, which (unlike tkinter's
@@ -175,7 +210,7 @@ def create_session_gui(session_folders, save_folder_suffix=None, session_default
                     'save_folder': full_save_path  # Store the full path
                 }
             
-            root.destroy()
+            _dismiss_window(root)
             return
             
         except ValueError as e:
@@ -315,7 +350,8 @@ def create_session_gui(session_folders, save_folder_suffix=None, session_default
     submit_btn = ttk.Button(button_frame, text="Submit & Continue", command=validate_and_submit)
     submit_btn.pack(side=tk.LEFT, padx=10)
     
-    cancel_btn = ttk.Button(button_frame, text="Cancel", command=root.destroy)
+    cancel_btn = ttk.Button(button_frame, text="Cancel",
+                            command=lambda: _dismiss_window(root))
     cancel_btn.pack(side=tk.LEFT, padx=10)
     
     # Instructions
@@ -336,6 +372,7 @@ def create_session_gui(session_folders, save_folder_suffix=None, session_default
     
     # Start GUI
     root.mainloop()
+    _destroy_window(root)
     
     return session_params
 
@@ -388,7 +425,7 @@ def create_parameter_gui(parameters, title="Parameter Settings"):
                     except ValueError:
                         param_values[param_name] = value
             
-            root.destroy()
+            _dismiss_window(root)
         except Exception as e:
             messagebox.showerror("Error", f"Error collecting parameters: {e}")
     
@@ -431,11 +468,13 @@ def create_parameter_gui(parameters, title="Parameter Settings"):
     submit_btn = ttk.Button(button_frame, text="Submit", command=on_submit)
     submit_btn.pack(side=tk.LEFT, padx=10)
     
-    cancel_btn = ttk.Button(button_frame, text="Cancel", command=root.destroy)
+    cancel_btn = ttk.Button(button_frame, text="Cancel",
+                            command=lambda: _dismiss_window(root))
     cancel_btn.pack(side=tk.LEFT, padx=10)
     
     # Start GUI
     root.mainloop()
+    _destroy_window(root)
     
     return param_values
 
@@ -559,13 +598,11 @@ def select_sessions(title="Select Session Folders", default_path=None):
         if not selected_folders:
             if not messagebox.askyesno("No folders selected", "No folders selected. Continue anyway?"):
                 return
-        root.quit()
-        root.destroy()
+        _dismiss_window(root)
 
     def on_cancel():
         selected_folders.clear()
-        root.quit()
-        root.destroy()
+        _dismiss_window(root)
 
     # Buttons
     button_frame = ttk.Frame(main_frame)
@@ -583,5 +620,6 @@ def select_sessions(title="Select Session Folders", default_path=None):
 
     refresh_list()
     root.mainloop()
+    _destroy_window(root)
 
     return selected_folders
