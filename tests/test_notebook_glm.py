@@ -28,7 +28,7 @@ def load_glm():
           "os": os, "json": json, "hashlib": hashlib}
     exec(compile(source, str(NOTEBOOK), "exec"), ns)
     cache_source = next("".join(c["source"]) for c in cells
-                        if "def glm_config_hash(" in "".join(c["source"]))
+                        if "def glm_stage_hash(" in "".join(c["source"]))
     # Load cache definitions, without executing fits on user recordings.
     tree = ast.parse(cache_source.split("# ---- run one fit per session ----")[0])
     exec(compile(tree, str(NOTEBOOK), "exec"), ns)
@@ -177,6 +177,47 @@ class NotebookGLMTests(unittest.TestCase):
                     event_times={"trial_indices": {"all": np.arange(n_trials)}},
                     aligned_trial_start={"all": {"count": counts}})
 
+    def test_stage_hashes_track_only_their_own_settings(self):
+        import tempfile as tf
+        from pathlib import Path as P
+        cfg = dict(self.glm["glm_config"])
+        with tf.TemporaryDirectory() as temp:
+            sess = self.make_session()
+            sess["spikes_path"] = str(P(temp) / "spikes.h5")
+            sess["results_folder"] = temp
+            P(sess["spikes_path"]).touch()
+            key = lambda c, stage: self.glm["glm_stage_hash"](sess, c, stage)
+            more_shifts = dict(cfg, n_shifts=cfg["n_shifts"] + 7)
+            other_folds = dict(cfg, cv_folds=cfg["cv_folds"] + 1)
+
+            # changing the shift count must leave core and cv keys alone
+            self.assertEqual(key(cfg, "core"), key(more_shifts, "core"))
+            self.assertEqual(key(cfg, "cv"), key(more_shifts, "cv"))
+            self.assertNotEqual(key(cfg, "shift"), key(more_shifts, "shift"))
+
+            # changing the fold count must leave core and shift keys alone
+            self.assertEqual(key(cfg, "core"), key(other_folds, "core"))
+            self.assertEqual(key(cfg, "shift"), key(other_folds, "shift"))
+            self.assertNotEqual(key(cfg, "cv"), key(other_folds, "cv"))
+
+            # the design itself invalidates every stage
+            wider = dict(cfg, fit_window=(-0.5, 1.5))
+            for stage in self.glm["GLM_STAGE_KEYS"]:
+                self.assertNotEqual(key(cfg, stage), key(wider, stage), stage)
+
+    def test_skipping_a_stage_leaves_it_nan_and_keeps_the_rest(self):
+        cfg = dict(self.glm["glm_config"], cv_folds=2, n_shifts=2,
+                   min_spikes=0, min_rate_hz=0)
+        sess = self.make_session()
+        partial = self.glm["session_glm"](sess, cfg, compute_cv=False, compute_shift=False)
+        self.assertTrue(np.isfinite(partial["effects"]["laser"]).all())
+        self.assertTrue(np.isfinite(partial["d2_insample"]).all())
+        self.assertTrue(np.isnan(partial["d2_heldout"]).all())
+        self.assertTrue(np.isnan(partial["delta_d2"]["laser"]).all())
+        self.assertTrue(np.isnan(partial["shift_p"]["laser"]).all())
+        statuses = {(c[1], c[2]) for c in partial["checks"]}
+        self.assertIn(("full/reduced cross-validation", "SKIPPED"), statuses)
+
     def test_cue_side_split_and_pooled_fallback(self):
         cfg = dict(self.glm["glm_config"], cv_folds=2, n_shifts=0,
                    min_spikes=0, min_rate_hz=0)
@@ -220,18 +261,24 @@ class NotebookGLMTests(unittest.TestCase):
                     self.assertTrue(np.isnan(result["effects"]["laser"]).all())
                     self.assertTrue(np.isnan(result["delta_d2"]["laser"]).all())
                 with tempfile.TemporaryDirectory() as temp:
-                    path = Path(temp) / "fit.npz"
                     sess["spikes_path"] = str(Path(temp) / "spikes.h5")
+                    sess["results_folder"] = temp
                     Path(sess["spikes_path"]).touch()
-                    key = self.glm["glm_config_hash"](sess, cfg)
-                    self.glm["glm_save"](path, result, key)
-                    loaded = self.glm["glm_load"](path, key)
-                    for group in self.glm["GLM_GROUPS"]:
-                        for name in result[group]:
-                            np.testing.assert_allclose(loaded[group][name], result[group][name])
-                    with patch.dict(self.glm, GLM_MODEL_VERSION="future-version"):
-                        new_key = self.glm["glm_config_hash"](sess, cfg)
-                    self.assertIsNone(self.glm["glm_load"](path, new_key))
+                    for stage, keys in self.glm["GLM_STAGE_KEYS"].items():
+                        path = Path(temp) / f"{stage}.npz"
+                        key = self.glm["glm_stage_hash"](sess, cfg, stage)
+                        self.glm["glm_save_stage"](path, result, stage, key)
+                        loaded = self.glm["glm_load_stage"](path, stage, key)
+                        for name in keys:
+                            if isinstance(result[name], dict):
+                                for item in result[name]:
+                                    np.testing.assert_allclose(loaded[name][item],
+                                                               result[name][item])
+                            else:
+                                np.testing.assert_allclose(loaded[name], result[name])
+                        with patch.dict(self.glm, GLM_MODEL_VERSION="future-version"):
+                            stale = self.glm["glm_stage_hash"](sess, cfg, stage)
+                        self.assertIsNone(self.glm["glm_load_stage"](path, stage, stale))
 
 
 if __name__ == "__main__":
